@@ -1,0 +1,3463 @@
+---
+title: "stereoscope trial"
+output: html_document
+date: "2024-05-23"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load dependencies
+
+```{r load libraries}
+suppressMessages(library(Seurat))
+suppressMessages(library(SeuratDisk))
+suppressMessages(library(schard))
+suppressMessages(library(tidyverse))
+suppressMessages(library(dplyr))
+suppressMessages(library(stringr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(knitr))
+suppressMessages(library(corrplot))
+suppressMessages(library(sf))
+suppressMessages(library(ggforce))
+suppressMessages(library(magick))
+suppressMessages(library(geojsonio))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(circlize))
+```
+
+# Stereoscope correlation 
+
+```{r convert h5d all samples}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     immune = NA,
+                     stroma = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get metadata from h5ad object
+  temp1 <- schard::h5ad2data.frame(paste0("~/Desktop/CIIR/data/Annotation/", info$Visum.h5ad.ID[i]), "obs")
+  colnames(temp1)[1] <- "cellid"
+  
+  # Get coordinates from Seurat object
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  
+  # Merge coordinate with metadata
+  temp1 <- merge(temp1, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get Stereoscope results (Minor folder with detailed clusters)
+  file_path <- paste0("/Users/tili/Desktop/CIIR/results/stereoscope/", patientid, ".mtx/")
+  file.name <- list.files(file_path)
+  temp1.stero <- read.delim(paste0(file_path, file.name))
+  
+  # Calculate percentage of each cell type
+  temp1$tumor <- temp1$tumor_cell_counts / temp1$total_cell_count
+  temp1$stroma <- temp1$stroma_cell_counts / temp1$total_cell_count
+  temp1$immune <- temp1$immune_cell_counts / temp1$total_cell_count
+  
+  # Remove NA values
+  temp1[is.na(temp1)] <- 0
+  
+  # Aggregate steroscope results
+  temp1.stero$immune_stero <- rowSums(temp1.stero[which(str_detect(colnames(temp1.stero), 
+                                      "B_cells|T_cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling_T.cells|DCs"))])
+  temp1.stero$stroma_stero <- rowSums(temp1.stero[which(str_detect(colnames(temp1.stero), 
+                                      "CAFs|Endothelial|PVL|Cycling_PVL"))])
+  temp1.stero$tumor_stero <- rowSums(temp1.stero[which(str_detect(colnames(temp1.stero), 
+                                      "Cancer"))])
+  
+  # Get stero and digital pathology percentage results
+  stero <- temp1.stero[, c(1, (ncol(temp1.stero)-2):(ncol(temp1.stero)))]
+  digital <- temp1[, c((ncol(temp1)-3): (ncol(temp1)))]
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(stero, digital, by.x = "X", by.y = "coor")
+  
+  # Remove position where digital pathology does not detect cells
+  temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 5:7]) == 0), ]
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  p1 <- ggplot(temp1.comb, aes(x = immune_stero, y = immune)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p1)
+  print(cor.test(temp1.comb$immune_stero, temp1.comb$immune, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  immune <- cor.test(temp1.comb$immune_stero, temp1.comb$immune, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$immune[i] <- immune$estimate
+  }
+
+  p2 <- ggplot(temp1.comb, aes(x = stroma_stero, y = stroma)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Stroma correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_stero, temp1.comb$stroma, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma <- cor.test(temp1.comb$stroma_stero, temp1.comb$stroma, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma[i] <- stroma$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_stero, y = tumor)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_stero, temp1.comb$tumor, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_stero, temp1.comb$tumor, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+```
+
+
+# Make visium spots a geojson file
+
+```{r Make visium spots a geojson file}
+
+# Get coordinates from Seurat object
+patientid <- info$id[2]
+load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+df <- get(patientid, bcsa@images)
+temp1.coor <- df@coordinates
+temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+temp1.coor$cellid <- rownames(temp1.coor)
+
+# Calculate the coordinate for full resolution image (30p image)
+temp1.coor$row_30p <- temp1.coor$imagerow 
+temp1.coor$col_30p <- temp1.coor$imagecol 
+
+# Check the orientation of the image
+ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+ima <- magick::image_read("/Users/tili/Desktop/CIIR/data/BCSA_images/200116_ST-AR_BC_A_B_V19T26-012_KT_V2_30p.jpg")
+
+# Get the width and height of the image
+image_in <- image_info(ima)
+width_30p <- image_in$width
+height_30p <- image_in$height
+
+# Use the height of the image to reverse the coordinates of y axis
+temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+# Check the orientation of the image
+ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+# Get the full resolution image for scale factor calculation
+ima <- magick::image_read("/Users/tili/Desktop/CIIR/data/BCSA_images/200116_ST-AR_BC_A_B_V19T26-012_KT_V1-Spot000001.jpg")
+
+# Get the width and height of the image
+image_in <- image_info(ima)
+width <- image_in$width
+height <- image_in$height
+
+# Calculate scale factor
+scaling_factor <- height_30p / height
+
+# Calculate the full resolution coordinates
+temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+radius <- (bcsa@images$BCSA1TumA2@scale.factors$spot / 2) / scaling_factor
+
+# Check the orientation of the image
+ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+# Check the orientation of the image
+ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+
+# Calculate the block coordinate for row and column, row is y axis, col is x axis
+temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
+temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
+temp1.coor$xmin <- temp1.coor$fullcol - radius
+temp1.coor$xmax <- temp1.coor$fullcol + radius
+
+# Visualize as scatter plot to check the orientation of coordinates
+ggplot() + 
+  geom_circle(temp1.coor, mapping = aes(x0 = fullcol, y0 = fullrow_reverse, r = radius), size = 1) + theme_bw() 
+
+# Extract the columns with full resolution coordinates
+circle_data <- temp1.coor[, c(7, 11, 13)]
+circle_data$radius <- rep(radius, nrow(circle_data))
+
+# Function to create a circle as an sf polygon
+create_circle <- function(x, y, r, n = 6) {
+  theta <- seq(0, 2 * pi, length.out = n)
+  x_coords <- x + r * cos(theta)
+  y_coords <- y + r * sin(theta)
+  coords <- cbind(x_coords, y_coords)
+  coords <- rbind(coords, coords[1, ])  # Ensure the polygon is closed
+  polygon <- st_polygon(list(coords))
+  return(st_sfc(polygon))
+}
+
+# Apply the function to create sf polygons for each circle
+circle_data$geometry <- mapply(create_circle, circle_data$fullcol, circle_data$fullrow_reverse, 
+                               circle_data$radius, SIMPLIFY = FALSE)
+
+# Ensure that geometry column is of class 'sfc'
+#circle_data$geometry <- do.call(st_sfc, circle_data$geometry)
+
+circle_sf <- st_as_sf(circle_data, coords = c("fullcol", "fullrow_reverse"), crs = 4326, agr = "constant")
+
+# Save to GeoJSON
+geojson_write(circle_sf, file = "/Users/tili/Desktop/CIIR/data/export_QuPath_annotation_Hosein/BCSA1_TumA2_circle_data.geojson")
+
+```
+
+# Make visium spots a geojson file with function for Tissue-level correlation
+
+```{r Make visium spots a geojson file with function}
+
+# Function to create a circle as an sf polygon
+create_circle <- function(x, y, r, n = 6) {
+  theta <- seq(0, 2 * pi, length.out = n)
+  x_coords <- x + r * cos(theta)
+  y_coords <- y + r * sin(theta)
+  coords <- cbind(x_coords, y_coords)
+  coords <- rbind(coords, coords[1, ])  # Ensure the polygon is closed
+  polygon <- st_polygon(list(coords))
+  return(st_sfc(polygon))
+}
+
+plot_list <- list()
+for (i in 1:nrow(info)) {
+  # Get coordinates from Seurat object
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+  
+  # Get image file names 
+  if (!patientid %in% c("BCSA4TumA1")) {
+      file_name <- paste0(info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .), "_30p.jpg")
+      ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", file_name))
+      
+      # Get the width and height of the image
+      image_in <- magick::image_info(ima)
+      width_30p <- image_in$width
+      height_30p <- image_in$height
+
+      # Use the height of the image to reverse the coordinates of y axis
+      temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+      # Check the orientation of the image
+      ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+  }
+
+  # Get the full resolution image for scale factor calculation
+  full_res_file <- info$Visum.h5ad.ID[i] %>% gsub("1.h5ad", "", .)
+  full_res_name <- list.files("/Users/tili/Desktop/CIIR/data/BCSA_images/")[list.files("/Users/tili/Desktop/CIIR/data/BCSA_images/") %>%
+                                                             grep(full_res_file, .)]
+  ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", full_res_name))
+
+  # Get the width and height of the image
+  image_in <- magick::image_info(ima)
+  width <- image_in$width
+  height <- image_in$height
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+    scaling_factor <- 1
+  } else {
+    scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+  
+  # Align the high resolution image with the high resolution coordinates
+  ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", 
+                                   info$Visium.ID[i], "/tissue_hires_image.png"))
+
+  # Get the width and height of the image
+  image_in <- magick::image_info(ima)
+  width_hires <- image_in$width
+  height_hires <- image_in$height
+  
+  hires <- read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F) %>% str_split(",", simplify = T)
+  hires <- hires[2] %>% str_split(": ", simplify = T)
+  hires <- hires[2] %>% as.numeric()
+
+  temp1.coor$hires_col <- temp1.coor$imagecol * hires
+  temp1.coor$hires_row_reverse <- height_hires - temp1.coor$imagerow * hires
+
+  # Plot the scatter plot on top of the HE images
+  plot_list[[patientid]] <- temp1.coor %>% 
+    ggplot(aes(x = hires_col, y = hires_row_reverse)) + 
+    annotation_raster(ima, ymin = 0, ymax= height_hires, xmin = 0, xmax = width_hires) + 
+    geom_point(col = "lightgreen", size = 0.7, alpha = 0.5) + theme_bw() + ggtitle(patientid)
+
+  # Visualize as scatter plot to check the orientation of coordinates
+  print(ggplot() + ggforce::geom_circle(temp1.coor, mapping = aes(x0 = fullcol, y0 = fullrow, r = radius), 
+                                        fill = "lightgreen") + theme_bw()) 
+
+  # Extract the columns with full resolution coordinates
+  circle_data <- temp1.coor[, which(colnames(temp1.coor) %in% c("cellid", "fullcol", "fullrow", "fullrow_reverse"))]
+  circle_data$radius <- rep(radius, nrow(circle_data))
+
+  # Apply the function to create sf polygons for each circle
+  circle_data$geometry <- mapply(create_circle, circle_data$fullcol, circle_data$fullrow, 
+                               circle_data$radius, SIMPLIFY = FALSE)
+
+  circle_sf <- st_as_sf(circle_data, coords = c("fullcol", "fullrow"), crs = 4326, agr = "constant")
+
+  # Save to GeoJSON
+  geojson_write(circle_sf, file = paste0("/Users/tili/Desktop/CIIR/data/Visium_circle_geojson/", patientid, "_circle_data.geojson"))
+}
+
+```
+
+# Stereoscope correlation - Tissue-level correlation
+
+```{r stereoscope tissue-level}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     stroma_immune = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  patientid <- info$id[i]
+  # Get qupath results from csv file
+  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tissue_annotation_qupath_analyzed/", 
+                           patientid, "_tissue.csv"))
+  temp1 <- temp1[,-1]
+  
+  # Get coordinates from Seurat object
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  
+  # Merge coordinate with metadata
+  temp1 <- merge(temp1, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get Stereoscope results (Minor subset)
+  file_path <- paste0("/Users/tili/Desktop/CIIR/results/stereoscope/", patientid, ".mtx/")
+  file.name <- list.files(file_path)
+  temp1.stero <- read.delim(paste0(file_path, file.name))
+  
+  # Remove NA values
+  temp1[is.na(temp1)] <- 0
+  
+  # Aggregate steroscope results
+  temp1.stero$immune_stero <- rowSums(temp1.stero[which(str_detect(colnames(temp1.stero), 
+                               "B_cells|T_cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling_T.cells|DCs"))])
+  temp1.stero$stroma_stero <- rowSums(temp1.stero[which(str_detect(colnames(temp1.stero), 
+                                      "CAFs|Endothelial|PVL|Cycling_PVL"))])
+  temp1.stero$tumor_stero <- rowSums(temp1.stero[which(str_detect(colnames(temp1.stero), 
+                                      "Cancer"))])
+  
+  # Get stero and digital pathology percentage results
+  stero <- temp1.stero[, c(1, (ncol(temp1.stero)-2):(ncol(temp1.stero)))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(stero, digital, by.x = "X", by.y = "coor")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 8:9]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 8:9]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  temp1.comb$stroma_immune_stero <- temp1.comb$stroma_stero + temp1.comb$immune_stero
+  p2 <- ggplot(temp1.comb, aes(x = stroma_immune_stero, y = stromal_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Tissue-level Stroma + Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_immune_stero, temp1.comb$stromal_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma_immune <- cor.test(temp1.comb$stroma_immune_stero, temp1.comb$stromal_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma_immune[i] <- stroma_immune$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_stero, y = tumor_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Tissue-level Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_stero, temp1.comb$tumor_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_stero, temp1.comb$tumor_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot tissue-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Tissue-level Correlation with Stereoscope", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/Stereoscope_tissue_correlation_20241007.csv")
+
+```
+
+# CARD correlation - Tissue-level correlation
+
+```{r CARD tissue-level}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     stroma_immune = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  patientid <- info$id[i]
+  # Get qupath results from csv file
+  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tissue_annotation_qupath_analyzed/", 
+                           patientid, "_tissue.csv"))
+  temp1 <- temp1[,-1]
+  
+  # Get coordinates from Seurat object
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  
+  # Merge coordinate with metadata
+  temp1 <- merge(temp1, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get CARD results (Minor folder with detailed clusters)
+  temp1.card <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/CARD/", patientid, 
+                                "_CARD_subset_1000_minor_common_genes.csv"), 
+                         row.names = 1)
+  
+  # Aggregate steroscope results
+  temp1.card$cellid <- rownames(temp1.card)
+  temp1.card$immune_card <- rowSums(temp1.card[which(str_detect(colnames(temp1.card), 
+                                      "B.cells|T.cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling.T.cells|DCs"))])
+  temp1.card$stroma_card <- rowSums(temp1.card[which(str_detect(colnames(temp1.card), 
+                                      "CAFs|Endothelial|PVL|Cycling.PVL"))])
+  temp1.card$tumor_card <- rowSums(temp1.card[which(str_detect(colnames(temp1.card), 
+                                      "Cancer"))])
+  
+  # Get CARD and digital pathology percentage results
+  card <- temp1.card[, c((ncol(temp1.card)-3):(ncol(temp1.card)))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(card, digital, by.x = "cellid", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 7:8]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 7:8]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  temp1.comb$stroma_immune_card <- temp1.comb$stroma_card + temp1.comb$immune_card
+  p2 <- ggplot(temp1.comb, aes(x = stroma_immune_card, y = stromal_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CARD Tissue-level Stroma + Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_immune_card, temp1.comb$stromal_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma_immune <- cor.test(temp1.comb$stroma_immune_card, temp1.comb$stromal_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma_immune[i] <- stroma_immune$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_card, y = tumor_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CARD Tissue-level Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_card, temp1.comb$tumor_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_card, temp1.comb$tumor_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot tissue-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Tissue-level Correlation with CARD", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/CARD_tissue_correlation_20241007.csv")
+
+```
+
+# CytoSPACE correlation - Tissue-level correlation
+
+```{r CytoSPACE tissue-level}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     stroma_immune = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  patientid <- info$id[i]
+  # Get qupath results from csv file
+  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tissue_annotation_qupath_analyzed/", 
+                           patientid, "_tissue.csv"))
+  temp1 <- temp1[,-1]
+  
+  # Get coordinates from Seurat object
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  
+  # Merge coordinate with metadata
+  temp1 <- merge(temp1, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get cytospace results (Minor folder with detailed clusters)
+  temp1.cyto <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/cytospace/", patientid, "/fractional_abundances_by_spot.csv"),
+                         row.names = 1)
+  
+  # Aggregate CytoSPACE results
+  temp1.cyto$cellid <- rownames(temp1.cyto)
+  temp1.cyto$immune_cyto <- rowSums(temp1.cyto[which(str_detect(colnames(temp1.cyto), 
+                                      "B.cells|T.cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling.T.cells|DCs"))])
+  temp1.cyto$stroma_cyto <- rowSums(temp1.cyto[which(str_detect(colnames(temp1.cyto), 
+                                      "CAFs|Endothelial|PVL|Cycling.PVL"))])
+  temp1.cyto$tumor_cyto <- rowSums(temp1.cyto[which(str_detect(colnames(temp1.cyto), 
+                                      "Cancer"))])
+  
+  # Get stero and digital pathology percentage results
+  cyto <- temp1.cyto[, c((ncol(temp1.cyto)-3):(ncol(temp1.cyto)))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(cyto, digital, by.x = "cellid", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 7:8]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 7:8]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  temp1.comb$stroma_immune_cyto <- temp1.comb$stroma_cyto + temp1.comb$immune_cyto
+  p2 <- ggplot(temp1.comb, aes(x = stroma_immune_cyto, y = stromal_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CytoSPACE Tissue-level Stroma + Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_immune_cyto, temp1.comb$stromal_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma_immune <- cor.test(temp1.comb$stroma_immune_cyto, temp1.comb$stromal_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma_immune[i] <- stroma_immune$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_cyto, y = tumor_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CytoSPACE Tissue-level Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_cyto, temp1.comb$tumor_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_cyto, temp1.comb$tumor_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot tissue-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Tissue-level Correlation with CytoSPACE", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/CytoSPACE_tissue_correlation_20241007.csv")
+
+```
+
+# RCTD correlation - Tissue-level correlation
+
+```{r RCTD tissue-level}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     stroma_immune = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  patientid <- info$id[i]
+  # Get qupath results from csv file
+  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tissue_annotation_qupath_analyzed/", 
+                           patientid, "_tissue.csv"))
+  temp1 <- temp1[,-1]
+  
+  # Get coordinates from Seurat object
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  
+  # Merge coordinate with metadata
+  temp1 <- merge(temp1, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get RCTD results (Minor folder with detailed clusters)
+  temp1.rctd <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/RCTD/", info$id[i], "_norm.txt"))
+  
+  # Aggregate RCTD results
+  temp1.rctd$immune_rctd <- rowSums(temp1.rctd[which(str_detect(colnames(temp1.rctd), 
+                                      "B_cells|T_cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling_T.cells|DCs"))])
+  temp1.rctd$stroma_rctd <- rowSums(temp1.rctd[which(str_detect(colnames(temp1.rctd), 
+                                      "CAFs|Endothelial|PVL|Cycling_PVL"))])
+  temp1.rctd$tumor_rctd <- rowSums(temp1.rctd[which(str_detect(colnames(temp1.rctd), 
+                                      "Cancer"))])
+  temp1.rctd$X <- rownames(temp1.rctd)
+  
+  # Get RCTD and digital pathology percentage results
+  rctd <- temp1.rctd[, c((ncol(temp1.rctd)-3):(ncol(temp1.rctd)))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(rctd, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 7:8]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 7:8]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  temp1.comb$stroma_immune_rctd <- temp1.comb$stroma_rctd + temp1.comb$immune_rctd
+  p2 <- ggplot(temp1.comb, aes(x = stroma_immune_rctd, y = stromal_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("RCTD Tissue-level Stroma + Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_immune_rctd, temp1.comb$stromal_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma_immune <- cor.test(temp1.comb$stroma_immune_rctd, temp1.comb$stromal_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma_immune[i] <- stroma_immune$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_rctd, y = tumor_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("RCTD Tissue-level Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_rctd, temp1.comb$tumor_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_rctd, temp1.comb$tumor_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot tissue-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Tissue-level Correlation with RCTD", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/RCTD_tissue_correlation_20241007.csv")
+
+```
+
+# DWLS correlation - Tissue-level correlation
+
+```{r DWLS tissue-level}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     stroma_immune = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  patientid <- info$id[i]
+  # Get qupath results from csv file
+  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tissue_annotation_qupath_analyzed/", 
+                           patientid, "_tissue.csv"))
+  temp1 <- temp1[,-1]
+  
+  # Get coordinates from Seurat object
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  
+  # Merge coordinate with metadata
+  temp1 <- merge(temp1, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get DWLS results (Minor folder with detailed clusters)
+  temp1.dwls <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/DWLS/", info$id[i], "_DWLS_res.txt"))
+  
+  # Aggregate DWLS results
+  temp1.dwls$immune_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "B_cells|T_cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling_T.cells|DCs"))])
+  temp1.dwls$stroma_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "CAFs|Endothelial|PVL|Cycling_PVL"))])
+  temp1.dwls$tumor_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "Cancer"))])
+  temp1.dwls$X <- rownames(temp1.dwls)
+  
+  # Get DWLS and digital pathology percentage results
+  dwls <- temp1.dwls[, c(ncol(temp1.dwls)-3):(ncol(temp1.dwls))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(dwls, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 7:8]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 7:8]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  temp1.comb$stroma_immune_dwls <- temp1.comb$stroma_dwls + temp1.comb$immune_dwls
+  p2 <- ggplot(temp1.comb, aes(x = stroma_immune_dwls, y = stromal_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("DWLS Tissue-level Stroma + Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_immune_dwls, temp1.comb$stromal_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma_immune <- cor.test(temp1.comb$stroma_immune_dwls, temp1.comb$stromal_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma_immune[i] <- stroma_immune$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_dwls, y = tumor_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("DWLS Tissue-level Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_dwls, temp1.comb$tumor_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_dwls, temp1.comb$tumor_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot tissue-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Tissue-level Correlation with DWLS", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/DWLS_tissue_correlation_20241007.csv")
+
+```
+
+# DWLS correlation - Tissue-level correlation
+
+```{r DWLS tissue-level}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     stroma_immune = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  patientid <- info$id[i]
+  # Get qupath results from csv file
+  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tissue_annotation_qupath_analyzed/", 
+                           patientid, "_tissue.csv"))
+  temp1 <- temp1[,-1]
+  
+  # Get coordinates from Seurat object
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  
+  # Merge coordinate with metadata
+  temp1 <- merge(temp1, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get SpatialDWLS results (Minor folder with detailed clusters)
+  temp1.dwls <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/SpatialDWLS/", info$id[i], "_SpatialDWLS.csv"),
+                         row.names = 2)
+  temp1.dwls <- temp1.dwls[,-which(colnames(temp1.dwls) == "X")]
+  
+  # Aggregate SpatialDWLS results
+  temp1.dwls$immune_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "B_cells|T_cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling_T.cells|DCs"))])
+  temp1.dwls$stroma_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "CAFs|Endothelial|PVL|Cycling_PVL"))])
+  temp1.dwls$tumor_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "Cancer"))])
+  temp1.dwls$X <- rownames(temp1.dwls)
+  
+  # Get DWLS and digital pathology percentage results
+  spatialdwls <- temp1.dwls[, c(ncol(temp1.dwls)-3):(ncol(temp1.dwls))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(spatialdwls, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 7:8]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 7:8]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  temp1.comb$stroma_immune_dwls <- temp1.comb$stroma_dwls + temp1.comb$immune_dwls
+  p2 <- ggplot(temp1.comb, aes(x = stroma_immune_dwls, y = stromal_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("SpatialDWLS Tissue-level Stroma + Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_immune_dwls, temp1.comb$stromal_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma_immune <- cor.test(temp1.comb$stroma_immune_dwls, temp1.comb$stromal_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma_immune[i] <- stroma_immune$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_dwls, y = tumor_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("SpatialDWLS Tissue-level Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_dwls, temp1.comb$tumor_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_dwls, temp1.comb$tumor_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot tissue-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Tissue-level Correlation with SpatialDWLS", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/SpatialDWLS_tissue_correlation_20241225.csv")
+
+```
+
+# Tangram correlation - Tissue-level correlation
+
+```{r Tangram tissue-level}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     stroma_immune = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  patientid <- info$id[i]
+  # Get qupath results from csv file
+  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tissue_annotation_qupath_analyzed/", 
+                           patientid, "_tissue.csv"))
+  temp1 <- temp1[,-1]
+  
+  # Get coordinates from Seurat object
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  
+  # Merge coordinate with metadata
+  temp1 <- merge(temp1, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get Tangram results (Minor folder with detailed clusters)
+  temp1.tan <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tangram/Minor_HER2_genes/", info$id[i], "_Tangram.csv"))
+  
+  # Normalize cell type proportion so that the proportion adds up to 1
+  temp1.tang <- rowSums(temp1.tan[,-1]) %>% as.data.frame() %>% 'colnames<-' ("RowSum")
+  temp1.tang$X <- temp1.tan$X
+  for (k in 2:ncol(temp1.tan)) {
+    temp1.tang[,k+1] <- temp1.tan[,k] / temp1.tang$RowSum
+    colnames(temp1.tang)[k+1] <- colnames(temp1.tan)[k]
+  }
+  temp1.tan <- temp1.tang[,-1]
+  
+  # Aggregate tangram results
+  temp1.tan$immune_tan <- rowSums(temp1.tan[which(str_detect(colnames(temp1.tan), 
+                                      "B.cells|T.cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling.T.cells|DCs"))])
+  temp1.tan$stroma_tan <- rowSums(temp1.tan[which(str_detect(colnames(temp1.tan), 
+                                      "CAFs|Endothelial|PVL|Cycling.PVL"))])
+  temp1.tan$tumor_tan <- rowSums(temp1.tan[which(str_detect(colnames(temp1.tan), 
+                                      "Cancer"))])
+  
+  # Get tangram and digital pathology percentage results
+  tan <- temp1.tan[, c(1, (ncol(temp1.tan)-2):(ncol(temp1.tan)))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(tan, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 7:8]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 7:8]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  temp1.comb$stroma_immune_tan <- temp1.comb$stroma_tan + temp1.comb$immune_tan
+  p2 <- ggplot(temp1.comb, aes(x = stroma_immune_tan, y = stromal_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Tangram Tissue-level Stroma + Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_immune_tan, temp1.comb$stromal_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma_immune <- cor.test(temp1.comb$stroma_immune_tan, temp1.comb$stromal_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma_immune[i] <- stroma_immune$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_tan, y = tumor_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Tangram Tissue-level Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_tan, temp1.comb$tumor_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_tan, temp1.comb$tumor_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot tissue-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Tissue-level Correlation with Tangram", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/Tangram_tissue_correlation_20241007.csv")
+
+```
+
+# Cell2location correlation - Tissue-level correlation
+
+```{r Cell2location tissue-level}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     stroma_immune = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  patientid <- info$id[i]
+  # Get qupath results from csv file
+  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tissue_annotation_qupath_analyzed/", 
+                           patientid, "_tissue.csv"))
+  temp1 <- temp1[,-1]
+  
+  # Get coordinates from Seurat object
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  
+  # Merge coordinate with metadata
+  temp1 <- merge(temp1, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get cell2location results (Minor folder with detailed clusters)
+  temp1.cel2 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/cell2location/", info$id[i], "_q05.csv"))
+  colnames(temp1.cel2) <- gsub("q05cell_abundance_w_sf_", "", colnames(temp1.cel2))
+  
+  # Normalize cell type proportion so that the proportion adds up to 1
+  temp1.cell2 <- rowSums(temp1.cel2[,-1]) %>% as.data.frame() %>% 'colnames<-' ("RowSum")
+  temp1.cell2$X <- temp1.cel2$X
+  for (k in 2:ncol(temp1.cel2)) {
+    temp1.cell2[,k+1] <- temp1.cel2[,k] / temp1.cell2$RowSum
+    colnames(temp1.cell2)[k+1] <- colnames(temp1.cel2)[k]
+  }
+  temp1.cel2 <- temp1.cell2[,-1]
+  
+  # Aggregate cell2location results
+  temp1.cel2$immune_cel2 <- rowSums(temp1.cel2[which(str_detect(colnames(temp1.cel2), 
+                                      "B.cells|T.cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling.T.cells|DCs"))])
+  temp1.cel2$stroma_cel2 <- rowSums(temp1.cel2[which(str_detect(colnames(temp1.cel2), 
+                                      "CAFs|Endothelial|PVL|Cycling.PVL"))])
+  temp1.cel2$tumor_cel2 <- rowSums(temp1.cel2[which(str_detect(colnames(temp1.cel2), 
+                                      "Cancer"))])
+  
+  # Get cell2location and digital pathology percentage results
+  cell2 <- temp1.cel2[, c(1, (ncol(temp1.cel2)-2):(ncol(temp1.cel2)))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(cell2, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 7:8]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 7:8]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  temp1.comb$stroma_immune_cel2 <- temp1.comb$stroma_cel2 + temp1.comb$immune_cel2
+  p2 <- ggplot(temp1.comb, aes(x = stroma_immune_cel2, y = stromal_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Cell2location Tissue-level Stroma + Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_immune_cel2, temp1.comb$stromal_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma_immune <- cor.test(temp1.comb$stroma_immune_cel2, temp1.comb$stromal_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma_immune[i] <- stroma_immune$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_cel2, y = tumor_frac)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Cell2location Tissue-level Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_cel2, temp1.comb$tumor_frac, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_cel2, temp1.comb$tumor_frac, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot tissue-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Tissue-level Correlation with Cell2location", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/Cell2location_tissue_correlation_20250108.csv")
+
+```
+
+# Cytospace correlation - Cell-level
+
+```{r cytoSPACE deconvolution}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     immune = NA,
+                     stroma = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
+  visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
+  d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  # Get the full resolution image for scale factor calculation
+  width <- info$width[i]
+  height <- info$height[i]
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+      scaling_factor <- 1
+  } else {
+      ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
+
+      # Get the width and height of the image
+      image_in <- magick::image_info(ima)
+      width_30p <- image_in$width
+      height_30p <- image_in$height
+
+      # Use the height of the image to reverse the coordinates of y axis
+      temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+      # Check the orientation of the image
+      ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+      scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  if (info$Patientid[i] == "BCSA1") {
+      d2$x <- d2$Centroid.X.px
+      d2$y <- d2$Centroid.Y.px
+  } else {
+      # The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
+      # Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
+      d2$x <- d2$Centroid.X.µm * 5.809
+      d2$y <- d2$Centroid.Y.µm * 5.809
+  }
+
+  d2$y_reverse <- height - d2$y
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+
+  # Calculate the block coordinate for row and column, row is y axis, col is x axis
+  temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
+  temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
+  temp1.coor$xmin <- temp1.coor$fullcol - radius
+  temp1.coor$xmax <- temp1.coor$fullcol + radius
+
+  # Check the orientation of the digital pathology annotation
+  ggplot(d2, aes(x = x, y = y_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+  # If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
+  d2$cellid <- NA
+  for (j in 1:nrow(d2)) {
+    x <- d2$x[j]
+    y <- d2$y_reverse[j]
+    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
+    if (nrow(temp4) == 0) {
+      d2$cellid[j] <- "Not_captured"
+    } else {
+      d2$cellid[j] <- temp4$cellid
+    }
+  }
+
+  # Remove the cells not captured
+  d4 <- d2 %>% filter(cellid != "Not_captured")
+
+  # Count number of tumor, immune, and stroma from each visium spot
+  # cell annotation output in txt file
+  d5 <- d4 %>% group_by(cellid) %>% 
+    dplyr::select(cellid, Classification, x, y_reverse) %>% 
+    dplyr::count(Classification) %>% 
+    dplyr::filter(Classification != "") %>% 
+    pivot_wider(names_from = Classification, values_from = n)
+  d5[is.na(d5)] <- 0
+
+  # Change colnames from Immune Cells to Immune
+  colnames(d5)[which(colnames(d5) == "Immune cells")] <- "Immune"
+  
+  # Calculate the total cell count and percentage
+  d5$total <- rowSums(d5[,-1])
+  d5$tumor_per <- d5$Tumor / d5$total
+  d5$immune_per <- d5$Immune / d5$total
+  d5$stroma_per <- d5$Stroma / d5$total
+
+  # Merge coordinate with metadata
+  temp1 <- merge(d5, temp1.coor, by.x = "cellid", by.y = "cellid")
+
+  d6 <- temp1[, c(1, 12, 13, 14)]
+  d5 <- merge(d5, d6, by.x = "cellid", by.y = "cellid", all.x = T, all.y = F)
+  
+  # Get cytospace results (Minor folder with detailed clusters)
+  temp1.cyto <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/cytospace/", patientid, "/fractional_abundances_by_spot.csv"),
+                         row.names = 1)
+  
+  # Aggregate cytospace results
+  temp1.cyto$cellid <- rownames(temp1.cyto)
+  temp1.cyto$immune_cyto <- rowSums(temp1.cyto[which(str_detect(colnames(temp1.cyto), 
+                                      "B.cells|T.cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling.T.cells|DCs"))])
+  temp1.cyto$stroma_cyto <- rowSums(temp1.cyto[which(str_detect(colnames(temp1.cyto), 
+                                      "CAFs|Endothelial|PVL|Cycling.PVL"))])
+  temp1.cyto$tumor_cyto <- rowSums(temp1.cyto[which(str_detect(colnames(temp1.cyto), 
+                                      "Cancer"))])
+  
+  # Get cytospace and digital pathology percentage results
+  cyto <- temp1.cyto[, c((ncol(temp1.cyto)-3):(ncol(temp1.cyto)))]
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(cyto, d5, by.x = "cellid", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 5:7]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 5:7]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  p1 <- ggplot(temp1.comb, aes(x = immune_cyto, y = immune_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CytoSPACE Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p1)
+  print(cor.test(temp1.comb$immune_cyto, temp1.comb$immune_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  immune <- cor.test(temp1.comb$immune_cyto, temp1.comb$immune_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$immune[i] <- immune$estimate
+  }
+  
+  p2 <- ggplot(temp1.comb, aes(x = stroma_cyto, y = stroma_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CytoSPACE Stroma correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_cyto, temp1.comb$stroma_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma <- cor.test(temp1.comb$stroma_cyto, temp1.comb$stroma_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma[i] <- stroma$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_cyto, y = tumor_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CytoSPACE Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_cyto, temp1.comb$tumor_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_cyto, temp1.comb$tumor_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot cell-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Cell-level Correlation with CytoSPACE", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/CytoSPACE_cell_correlation_20241008.csv")
+
+```
+
+# CARD correlation - Cell-level
+
+```{r CARD deconvolution}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     immune = NA,
+                     stroma = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
+  visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
+  d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  # Get the full resolution image for scale factor calculation
+  width <- info$width[i]
+  height <- info$height[i]
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+      scaling_factor <- 1
+  } else {
+      ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
+
+      # Get the width and height of the image
+      image_in <- magick::image_info(ima)
+      width_30p <- image_in$width
+      height_30p <- image_in$height
+
+      # Use the height of the image to reverse the coordinates of y axis
+      temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+      # Check the orientation of the image
+      ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()    
+    
+      scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  if (info$Patientid[i] == "BCSA1") {
+      d2$x <- d2$Centroid.X.px
+      d2$y <- d2$Centroid.Y.px
+  } else {
+      # The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
+      # Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
+      d2$x <- d2$Centroid.X.µm * 5.809
+      d2$y <- d2$Centroid.Y.µm * 5.809
+  }
+
+  d2$y_reverse <- height - d2$y
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+
+  # Calculate the block coordinate for row and column, row is y axis, col is x axis
+  temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
+  temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
+  temp1.coor$xmin <- temp1.coor$fullcol - radius
+  temp1.coor$xmax <- temp1.coor$fullcol + radius
+
+  # Check the orientation of the digital pathology annotation
+  ggplot(d2, aes(x = x, y = y_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+  # If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
+  d2$cellid <- NA
+  for (j in 1:nrow(d2)) {
+    x <- d2$x[j]
+    y <- d2$y_reverse[j]
+    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
+    if (nrow(temp4) == 0) {
+      d2$cellid[j] <- "Not_captured"
+    } else {
+      d2$cellid[j] <- temp4$cellid
+    }
+  }
+
+  # Remove the cells not captured
+  d4 <- d2 %>% filter(cellid != "Not_captured")
+
+  # Count number of tumor, immune, and stroma from each visium spot
+  # cell annotation output in txt file
+  d5 <- d4 %>% group_by(cellid) %>% 
+    dplyr::select(cellid, Classification, x, y_reverse) %>% 
+    dplyr::count(Classification) %>% 
+    dplyr::filter(Classification != "") %>% 
+    pivot_wider(names_from = Classification, values_from = n)
+  d5[is.na(d5)] <- 0
+
+  # Change colnames from Immune Cells to Immune
+  colnames(d5)[which(colnames(d5) == "Immune cells")] <- "Immune"
+  
+  # Calculate the total cell count and percentage
+  d5$total <- rowSums(d5[,-1])
+  d5$tumor_per <- d5$Tumor / d5$total
+  d5$immune_per <- d5$Immune / d5$total
+  d5$stroma_per <- d5$Stroma / d5$total
+
+  # Merge coordinate with metadata
+  temp1 <- merge(d5, temp1.coor, by.x = "cellid", by.y = "cellid")
+
+  d6 <- temp1[, c(1, 12, 13, 14)]
+  d5 <- merge(d5, d6, by.x = "cellid", by.y = "cellid", all.x = T, all.y = F)
+  
+  # Get CARD results (Minor folder with detailed clusters)
+  temp1.card <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/CARD/", patientid, 
+                                "_CARD_subset_1000_minor_common_genes.csv"), 
+                         row.names = 1)
+  
+  # Aggregate CARD results
+  temp1.card$cellid <- rownames(temp1.card)
+  temp1.card$immune_card <- rowSums(temp1.card[which(str_detect(colnames(temp1.card), 
+                                      "B.cells|T.cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling.T.cells|DCs"))])
+  temp1.card$stroma_card <- rowSums(temp1.card[which(str_detect(colnames(temp1.card), 
+                                      "CAFs|Endothelial|PVL|Cycling.PVL"))])
+  temp1.card$tumor_card <- rowSums(temp1.card[which(str_detect(colnames(temp1.card), 
+                                      "Cancer"))])
+  
+  # Get stero and digital pathology percentage results
+  card <- temp1.card[, c((ncol(temp1.card)-3):(ncol(temp1.card)))]
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(card, d5, by.x = "cellid", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 5:7]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 5:7]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  p1 <- ggplot(temp1.comb, aes(x = immune_card, y = immune_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CARD Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p1)
+  print(cor.test(temp1.comb$immune_card, temp1.comb$immune_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  immune <- cor.test(temp1.comb$immune_card, temp1.comb$immune_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$immune[i] <- immune$estimate
+  }
+
+  p2 <- ggplot(temp1.comb, aes(x = stroma_card, y = stroma_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CARD Stroma correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_card, temp1.comb$stroma_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma <- cor.test(temp1.comb$stroma_card, temp1.comb$stroma_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma[i] <- stroma$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_card, y = tumor_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("CARD Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_card, temp1.comb$tumor_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_card, temp1.comb$tumor_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot cell-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Cell-level Correlation with CARD", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/CARD_cell_correlation_20241008.csv")
+
+```
+
+# Tangram correlation - Cell-level
+
+```{r Tangram cell-level correlation}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     immune = NA,
+                     stroma = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
+  visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
+  d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  # Get the full resolution image pixel number for scale factor calculation
+  width <- info$width[i]
+  height <- info$height[i]
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+      scaling_factor <- 1
+  } else {
+      ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
+
+      # Get the width and height of the image
+      image_in <- magick::image_info(ima)
+      width_30p <- image_in$width
+      height_30p <- image_in$height
+
+      # Use the height of the image to reverse the coordinates of y axis
+      temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+      # Check the orientation of the image
+      ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+      scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  if (info$Patientid[i] == "BCSA1") {
+      d2$x <- d2$Centroid.X.px
+      d2$y <- d2$Centroid.Y.px
+  } else {
+      # The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
+      # Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
+      d2$x <- d2$Centroid.X.µm * 5.809
+      d2$y <- d2$Centroid.Y.µm * 5.809
+  }
+
+  d2$y_reverse <- height - d2$y
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+
+  # Calculate the block coordinate for row and column, row is y axis, col is x axis
+  temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
+  temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
+  temp1.coor$xmin <- temp1.coor$fullcol - radius
+  temp1.coor$xmax <- temp1.coor$fullcol + radius
+
+  # Check the orientation of the digital pathology annotation
+  ggplot(d2, aes(x = x, y = y_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+  # If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
+  d2$cellid <- NA
+  for (j in 1:nrow(d2)) {
+    x <- d2$x[j]
+    y <- d2$y_reverse[j]
+    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
+    if (nrow(temp4) == 0) {
+      d2$cellid[j] <- "Not_captured"
+    } else {
+      d2$cellid[j] <- temp4$cellid
+    }
+  }
+
+  # Remove the cells not captured
+  d4 <- d2 %>% filter(cellid != "Not_captured")
+
+  # Count number of tumor, immune, and stroma from each visium spot
+  # cell annotation output in txt file
+  d5 <- d4 %>% group_by(cellid) %>% 
+    dplyr::select(cellid, Classification, x, y_reverse) %>% 
+    dplyr::count(Classification) %>% 
+    dplyr::filter(Classification != "") %>% 
+    pivot_wider(names_from = Classification, values_from = n)
+  d5[is.na(d5)] <- 0
+
+  # Change colnames from Immune Cells to Immune
+  colnames(d5)[which(colnames(d5) == "Immune cells")] <- "Immune"
+  
+  # Calculate the total cell count and percentage
+  d5$total <- rowSums(d5[,-1])
+  d5$tumor_per <- d5$Tumor / d5$total
+  d5$immune_per <- d5$Immune / d5$total
+  d5$stroma_per <- d5$Stroma / d5$total
+
+  # Merge coordinate with metadata
+  temp1 <- merge(d5, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get Tangram results (Minor folder with detailed clusters)
+  temp1.tan <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/Tangram/Minor_HER2_genes/", info$id[i], "_Tangram.csv"))
+  
+  # Normalize cell type proportion so that the proportion adds up to 1
+  temp1.tang <- rowSums(temp1.tan[,-1]) %>% as.data.frame() %>% 'colnames<-' ("RowSum")
+  temp1.tang$X <- temp1.tan$X
+  for (k in 2:ncol(temp1.tan)) {
+    temp1.tang[,k+1] <- temp1.tan[,k] / temp1.tang$RowSum
+    colnames(temp1.tang)[k+1] <- colnames(temp1.tan)[k]
+  }
+  temp1.tan <- temp1.tang[,-1]
+  
+  # Aggregate tangram results
+  temp1.tan$immune_tan <- rowSums(temp1.tan[which(str_detect(colnames(temp1.tan), 
+                                      "B.cells|T.cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling.T.cells|DCs"))])
+  temp1.tan$stroma_tan <- rowSums(temp1.tan[which(str_detect(colnames(temp1.tan), 
+                                      "CAFs|Endothelial|PVL|Cycling.PVL"))])
+  temp1.tan$tumor_tan <- rowSums(temp1.tan[which(str_detect(colnames(temp1.tan), 
+                                      "Cancer"))])
+  
+  # Get tangram and digital pathology percentage results
+  tan <- temp1.tan[, c(1, (ncol(temp1.tan)-2):(ncol(temp1.tan)))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(tan, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 5:7]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 5:7]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  p1 <- ggplot(temp1.comb, aes(x = immune_tan, y = immune_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Tangram: Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p1)
+  print(cor.test(temp1.comb$immune_tan, temp1.comb$immune_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  immune <- cor.test(temp1.comb$immune_tan, temp1.comb$immune_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$immune[i] <- immune$estimate
+  }
+  
+  p2 <- ggplot(temp1.comb, aes(x = stroma_tan, y = stroma_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Tangram: Stroma correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_tan, temp1.comb$stroma_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma <- cor.test(temp1.comb$stroma_tan, temp1.comb$stroma_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma[i] <- stroma$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_tan, y = tumor_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Tangram: Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_tan, temp1.comb$tumor_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_tan, temp1.comb$tumor_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+  
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot cell-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Cell-level Correlation with Tangram", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/Tangram_cell_correlation_20241008.csv")
+
+```
+
+# DWLS correlation - Cell-level
+
+```{r DWLS cell-level correlation}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     immune = NA,
+                     stroma = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
+  visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
+  d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  # Get the full resolution image pixel number for scale factor calculation
+  width <- info$width[i]
+  height <- info$height[i]
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+      scaling_factor <- 1
+  } else {
+      ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
+
+      # Get the width and height of the image
+      image_in <- magick::image_info(ima)
+      width_30p <- image_in$width
+      height_30p <- image_in$height
+
+      # Use the height of the image to reverse the coordinates of y axis
+      temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+      # Check the orientation of the image
+      ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+      scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  if (info$Patientid[i] == "BCSA1") {
+      d2$x <- d2$Centroid.X.px
+      d2$y <- d2$Centroid.Y.px
+  } else {
+      # The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
+      # Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
+      d2$x <- d2$Centroid.X.µm * 5.809
+      d2$y <- d2$Centroid.Y.µm * 5.809
+  }
+
+  d2$y_reverse <- height - d2$y
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+
+  # Calculate the block coordinate for row and column, row is y axis, col is x axis
+  temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
+  temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
+  temp1.coor$xmin <- temp1.coor$fullcol - radius
+  temp1.coor$xmax <- temp1.coor$fullcol + radius
+
+  # Check the orientation of the digital pathology annotation
+  ggplot(d2, aes(x = x, y = y_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+  # If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
+  d2$cellid <- NA
+  for (j in 1:nrow(d2)) {
+    x <- d2$x[j]
+    y <- d2$y_reverse[j]
+    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
+    if (nrow(temp4) == 0) {
+      d2$cellid[j] <- "Not_captured"
+    } else {
+      d2$cellid[j] <- temp4$cellid
+    }
+  }
+
+  # Remove the cells not captured
+  d4 <- d2 %>% filter(cellid != "Not_captured")
+
+  # Count number of tumor, immune, and stroma from each visium spot
+  # cell annotation output in txt file
+  d5 <- d4 %>% group_by(cellid) %>% 
+    dplyr::select(cellid, Classification, x, y_reverse) %>% 
+    dplyr::count(Classification) %>% 
+    dplyr::filter(Classification != "") %>% 
+    pivot_wider(names_from = Classification, values_from = n)
+  d5[is.na(d5)] <- 0
+
+  # Change colnames from Immune Cells to Immune
+  colnames(d5)[which(colnames(d5) == "Immune cells")] <- "Immune"
+  
+  # Calculate the total cell count and percentage
+  d5$total <- rowSums(d5[,-1])
+  d5$tumor_per <- d5$Tumor / d5$total
+  d5$immune_per <- d5$Immune / d5$total
+  d5$stroma_per <- d5$Stroma / d5$total
+
+  # Merge coordinate with metadata
+  temp1 <- merge(d5, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get DWLS results (Minor folder with detailed clusters)
+  temp1.dwls <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/DWLS/", info$id[i], "_DWLS_res.txt"))
+  
+  # Aggregate DWLS results
+  temp1.dwls$immune_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "B_cells|T_cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling_T.cells|DCs"))])
+  temp1.dwls$stroma_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "CAFs|Endothelial|PVL|Cycling_PVL"))])
+  temp1.dwls$tumor_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "Cancer"))])
+  temp1.dwls$X <- rownames(temp1.dwls)
+  
+  # Get DWLS and digital pathology percentage results
+  dwls <- temp1.dwls[, c(ncol(temp1.dwls)-3):(ncol(temp1.dwls))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(dwls, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 5:7]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 5:7]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  p1 <- ggplot(temp1.comb, aes(x = immune_dwls, y = immune_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("DWLS: Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p1)
+  print(cor.test(temp1.comb$immune_dwls, temp1.comb$immune_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  immune <- cor.test(temp1.comb$immune_dwls, temp1.comb$immune_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$immune[i] <- immune$estimate
+  }
+  
+  p2 <- ggplot(temp1.comb, aes(x = stroma_dwls, y = stroma_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("DWLS: Stroma correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_dwls, temp1.comb$stroma_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma <- cor.test(temp1.comb$stroma_dwls, temp1.comb$stroma_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma[i] <- stroma$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_dwls, y = tumor_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("DWLS: Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_dwls, temp1.comb$tumor_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_dwls, temp1.comb$tumor_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+  
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot cell-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Cell-level Correlation with DWLS", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/DWLS_cell_correlation_20241008.csv")
+
+```
+
+# SpatialDWLS correlation - Cell-level
+
+```{r SpatialDWLS cell-level correlation}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     immune = NA,
+                     stroma = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
+  visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
+  d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  # Get the full resolution image pixel number for scale factor calculation
+  width <- info$width[i]
+  height <- info$height[i]
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+      scaling_factor <- 1
+  } else {
+      ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
+
+      # Get the width and height of the image
+      image_in <- magick::image_info(ima)
+      width_30p <- image_in$width
+      height_30p <- image_in$height
+
+      # Use the height of the image to reverse the coordinates of y axis
+      temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+      # Check the orientation of the image
+      ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+      scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  if (info$Patientid[i] == "BCSA1") {
+      d2$x <- d2$Centroid.X.px
+      d2$y <- d2$Centroid.Y.px
+  } else {
+      # The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
+      # Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
+      d2$x <- d2$Centroid.X.µm * 5.809
+      d2$y <- d2$Centroid.Y.µm * 5.809
+  }
+
+  d2$y_reverse <- height - d2$y
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+
+  # Calculate the block coordinate for row and column, row is y axis, col is x axis
+  temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
+  temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
+  temp1.coor$xmin <- temp1.coor$fullcol - radius
+  temp1.coor$xmax <- temp1.coor$fullcol + radius
+
+  # Check the orientation of the digital pathology annotation
+  ggplot(d2, aes(x = x, y = y_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+  # If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
+  d2$cellid <- NA
+  for (j in 1:nrow(d2)) {
+    x <- d2$x[j]
+    y <- d2$y_reverse[j]
+    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
+    if (nrow(temp4) == 0) {
+      d2$cellid[j] <- "Not_captured"
+    } else {
+      d2$cellid[j] <- temp4$cellid
+    }
+  }
+
+  # Remove the cells not captured
+  d4 <- d2 %>% filter(cellid != "Not_captured")
+
+  # Count number of tumor, immune, and stroma from each visium spot
+  # cell annotation output in txt file
+  d5 <- d4 %>% group_by(cellid) %>% 
+    dplyr::select(cellid, Classification, x, y_reverse) %>% 
+    dplyr::count(Classification) %>% 
+    dplyr::filter(Classification != "") %>% 
+    pivot_wider(names_from = Classification, values_from = n)
+  d5[is.na(d5)] <- 0
+
+  # Change colnames from Immune Cells to Immune
+  colnames(d5)[which(colnames(d5) == "Immune cells")] <- "Immune"
+  
+  # Calculate the total cell count and percentage
+  d5$total <- rowSums(d5[,-1])
+  d5$tumor_per <- d5$Tumor / d5$total
+  d5$immune_per <- d5$Immune / d5$total
+  d5$stroma_per <- d5$Stroma / d5$total
+
+  # Merge coordinate with metadata
+  temp1 <- merge(d5, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get SpatialDWLS results (Minor folder with detailed clusters)
+  temp1.dwls <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/SpatialDWLS/", info$id[i], "_SpatialDWLS.csv"),
+                         row.names = 2)
+  temp1.dwls <- temp1.dwls[,-which(colnames(temp1.dwls) == "X")]
+  
+  # Aggregate SpatialDWLS results
+  temp1.dwls$immune_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "B_cells|T_cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling_T.cells|DCs"))])
+  temp1.dwls$stroma_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "CAFs|Endothelial|PVL|Cycling_PVL"))])
+  temp1.dwls$tumor_dwls <- rowSums(temp1.dwls[which(str_detect(colnames(temp1.dwls), 
+                                      "Cancer"))])
+  temp1.dwls$X <- rownames(temp1.dwls)
+  
+  # Get DWLS and digital pathology percentage results
+  spatialdwls <- temp1.dwls[, c(ncol(temp1.dwls)-3):(ncol(temp1.dwls))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(spatialdwls, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 5:7]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 5:7]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  p1 <- ggplot(temp1.comb, aes(x = immune_dwls, y = immune_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("SpatialDWLS: Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p1)
+  print(cor.test(temp1.comb$immune_dwls, temp1.comb$immune_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  immune <- cor.test(temp1.comb$immune_dwls, temp1.comb$immune_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$immune[i] <- immune$estimate
+  }
+  
+  p2 <- ggplot(temp1.comb, aes(x = stroma_dwls, y = stroma_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("SpatialDWLS: Stroma correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_dwls, temp1.comb$stroma_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma <- cor.test(temp1.comb$stroma_dwls, temp1.comb$stroma_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma[i] <- stroma$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_dwls, y = tumor_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("SpatialDWLS: Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_dwls, temp1.comb$tumor_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_dwls, temp1.comb$tumor_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+  
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot cell-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Cell-level Correlation with SpatialDWLS", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/SpatialDWLS_cell_correlation_20241225.csv")
+
+```
+
+# Cell2location correlation - Cell-level
+
+```{r Cell2location cell-level correlation}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     immune = NA,
+                     stroma = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
+  visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
+  d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  # Get the full resolution image pixel number for scale factor calculation
+  width <- info$width[i]
+  height <- info$height[i]
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+      scaling_factor <- 1
+  } else {
+      ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
+
+      # Get the width and height of the image
+      image_in <- magick::image_info(ima)
+      width_30p <- image_in$width
+      height_30p <- image_in$height
+
+      # Use the height of the image to reverse the coordinates of y axis
+      temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+      # Check the orientation of the image
+      ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+      scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  if (info$Patientid[i] == "BCSA1") {
+      d2$x <- d2$Centroid.X.px
+      d2$y <- d2$Centroid.Y.px
+  } else {
+      # The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
+      # Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
+      d2$x <- d2$Centroid.X.µm * 5.809
+      d2$y <- d2$Centroid.Y.µm * 5.809
+  }
+
+  d2$y_reverse <- height - d2$y
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+
+  # Calculate the block coordinate for row and column, row is y axis, col is x axis
+  temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
+  temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
+  temp1.coor$xmin <- temp1.coor$fullcol - radius
+  temp1.coor$xmax <- temp1.coor$fullcol + radius
+
+  # Check the orientation of the digital pathology annotation
+  ggplot(d2, aes(x = x, y = y_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+  # If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
+  d2$cellid <- NA
+  for (j in 1:nrow(d2)) {
+    x <- d2$x[j]
+    y <- d2$y_reverse[j]
+    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
+    if (nrow(temp4) == 0) {
+      d2$cellid[j] <- "Not_captured"
+    } else {
+      d2$cellid[j] <- temp4$cellid
+    }
+  }
+
+  # Remove the cells not captured
+  d4 <- d2 %>% filter(cellid != "Not_captured")
+
+  # Count number of tumor, immune, and stroma from each visium spot
+  # cell annotation output in txt file
+  d5 <- d4 %>% group_by(cellid) %>% 
+    dplyr::select(cellid, Classification, x, y_reverse) %>% 
+    dplyr::count(Classification) %>% 
+    dplyr::filter(Classification != "") %>%     
+    pivot_wider(names_from = Classification, values_from = n)
+  d5[is.na(d5)] <- 0
+
+  # Change colnames from Immune Cells to Immune
+  colnames(d5)[which(colnames(d5) == "Immune cells")] <- "Immune"
+  
+  # Calculate the total cell count and percentage
+  d5$total <- rowSums(d5[,-1])
+  d5$tumor_per <- d5$Tumor / d5$total
+  d5$immune_per <- d5$Immune / d5$total
+  d5$stroma_per <- d5$Stroma / d5$total
+
+  # Merge coordinate with metadata
+  temp1 <- merge(d5, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get cell2location results (Minor folder with detailed clusters)
+  temp1.cel2 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/cell2location/", info$id[i], "_q05.csv"))
+  colnames(temp1.cel2) <- gsub("q05cell_abundance_w_sf_", "", colnames(temp1.cel2))
+  
+  # Normalize cell type proportion so that the proportion adds up to 1
+  temp1.cell2 <- rowSums(temp1.cel2[,-1]) %>% as.data.frame() %>% 'colnames<-' ("RowSum")
+  temp1.cell2$X <- temp1.cel2$X
+  for (k in 2:ncol(temp1.cel2)) {
+    temp1.cell2[,k+1] <- temp1.cel2[,k] / temp1.cell2$RowSum
+    colnames(temp1.cell2)[k+1] <- colnames(temp1.cel2)[k]
+  }
+  temp1.cel2 <- temp1.cell2[,-1]
+  
+  # Aggregate cell2location results
+  temp1.cel2$immune_cel2 <- rowSums(temp1.cel2[which(str_detect(colnames(temp1.cel2), 
+                                      "B.cells|T.cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling.T.cells|DCs"))])
+  temp1.cel2$stroma_cel2 <- rowSums(temp1.cel2[which(str_detect(colnames(temp1.cel2), 
+                                      "CAFs|Endothelial|PVL|Cycling.PVL"))])
+  temp1.cel2$tumor_cel2 <- rowSums(temp1.cel2[which(str_detect(colnames(temp1.cel2), 
+                                      "Cancer"))])
+  
+  # Get cell2location and digital pathology percentage results
+  cell2 <- temp1.cel2[, c(1, (ncol(temp1.cel2)-2):(ncol(temp1.cel2)))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(cell2, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 5:7]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 5:7]) == 0), ]
+  }
+  
+  # Save the combined results from digital pathology and deconvolution
+  write.csv(temp1.comb, file = paste0("/Users/tili/Desktop/CIIR/results/cell2location/Merged_correlation_results/",
+                                      info$id[i], "_correlation_matrix.csv"))
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  p1 <- ggplot(temp1.comb, aes(x = immune_cel2, y = immune_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Cell2location: Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p1)
+  print(cor.test(temp1.comb$immune_cel2, temp1.comb$immune_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  immune <- cor.test(temp1.comb$immune_cel2, temp1.comb$immune_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$immune[i] <- immune$estimate
+  }
+  
+  p2 <- ggplot(temp1.comb, aes(x = stroma_cel2, y = stroma_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Cell2location: Stroma correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_cel2, temp1.comb$stroma_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma <- cor.test(temp1.comb$stroma_cel2, temp1.comb$stroma_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma[i] <- stroma$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_cel2, y = tumor_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Cell2location: Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_cel2, temp1.comb$tumor_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_cel2, temp1.comb$tumor_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+  
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot cell-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Cell-level Correlation with Cell2location", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/Cell2location_cell_correlation_20250108.csv")
+
+```
+
+## python coordinate
+
+```{python coordinate plotting}
+
+import pandas as pd
+import plotly_express as px
+
+# Import from digital annotation results
+annot = pd.read_csv('/Users/tili/Desktop/CIIR/data/Test_run_200116_ST-AR_BC_A_B_V19T26-012_KT_V1-Spot000001/digital.annotation.csv')
+
+# Plot scatter plot
+fig = px.scatter(annot[::10], x='x', y='y', color = 'classification')
+
+# Flip x axis in the digital pathology
+fig.update_layout(xaxis = dict(autorange = "reversed"))
+fig.write_html('/Users/tili/Desktop/CIIR/data/Test_run_200116_ST-AR_BC_A_B_V19T26-012_KT_V1-Spot000001//new.html')
+
+# Import spaceranger output
+tissue_pos  = pd.read_csv('/home/hosein.toosi/Spatial/visium_spatial_out/V19T26-012_A1/tissue_positions_list.csv', header = None)
+tissue_pos = tissue_pos.rename(columns = {i:x for i,x in enumerate('barcode in_tisse row col pxl_row pxl_col'.split())})
+
+fig2 = px.scatter(tissue_pos, x='pxl_col', y='pxl_row', color = 'in_tisse')
+fig2.update_layout(yaxis = dict(autorange = "reversed"))
+fig2.write_html('new_annotations_2024/new_spot_loc.html')
+
+```
+
+# Plot the histogram of QuPath predicted cell number
+
+```{r QuPath predicted cell number}
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  patientid <- info$id[i]
+  df <- read.csv(file = paste0("/Users/tili/Desktop/CIIR/results/cell2location/Merged_correlation_results/",
+                                      info$id[i], "_correlation_matrix.csv"))
+  hist(df$total, main = patientid)
+}
+
+```
+
+# Stereoscope Correlation - Cell-level
+
+```{r cell-level correlation with stereoscope}
+
+# Load metadata
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     immune = NA,
+                     stroma = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get digital correlation results
+  #temp1 <- schard::h5ad2data.frame(paste0("~/Desktop/CIIR/data/Annotation/", info$Visum.h5ad.ID[2]), "obs")
+  #colnames(temp1)[1] <- "cellid"
+  
+  # Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
+  #d2 <- dig
+  #d2$x <- round(d2$x, digits = 3)
+  #d2$y <- round(d2$y, digits = 3)
+  visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
+  d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  # Get the full resolution image for scale factor calculation
+  #full_res_file <- info$Visum.h5ad.ID[i] %>% gsub("1.h5ad", "", .)
+  #full_res_name <- list.files("/Users/tili/Desktop/CIIR/data/BCSA_images/")[list.files("/Users/tili/Desktop/CIIR/data/BCSA_images/") %>%
+  #                                                           grep(full_res_file, .)]
+  #ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", full_res_name))
+
+  # Get the width and height of the image
+  #image_in <- magick::image_info(ima)
+  #width <- image_in$width
+  #height <- image_in$height
+  width <- info$width[i]
+  height <- info$height[i]
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+    scaling_factor <- 1
+  } else {
+    ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
+
+    # Get the width and height of the image
+    image_in <- magick::image_info(ima)
+    width_30p <- image_in$width
+    height_30p <- image_in$height
+
+    # Use the height of the image to reverse the coordinates of y axis
+    temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+    # Check the orientation of the image
+    ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+    
+    scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  if (info$Patientid[i] == "BCSA1") {
+      d2$x <- d2$Centroid.X.px
+      d2$y <- d2$Centroid.Y.px
+  } else {
+      # The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
+      # Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
+      d2$x <- d2$Centroid.X.µm * 5.809
+      d2$y <- d2$Centroid.Y.µm * 5.809
+  }
+
+  d2$y_reverse <- height - d2$y
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+
+  # Calculate the block coordinate for row and column, row is y axis, col is x axis
+  temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
+  temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
+  temp1.coor$xmin <- temp1.coor$fullcol - radius
+  temp1.coor$xmax <- temp1.coor$fullcol + radius
+
+  # Check the orientation of the digital pathology annotation
+  ggplot(d2, aes(x = x, y = y_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+  # If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
+  d2$cellid <- NA
+  for (j in 1:nrow(d2)) {
+    x <- d2$x[j]
+    y <- d2$y_reverse[j]
+    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
+    if (nrow(temp4) == 0) {
+      d2$cellid[j] <- "Not_captured"
+    } else {
+      d2$cellid[j] <- temp4$cellid
+    }
+  }
+
+  # Remove the cells not captured
+  d4 <- d2 %>% filter(cellid != "Not_captured")
+
+  # Count number of tumor, immune, and stroma from each visium spot
+  # cell annotation output in txt file
+  d5 <- d4 %>% group_by(cellid) %>% 
+    dplyr::select(cellid, Classification, x, y_reverse) %>% 
+    dplyr::count(Classification) %>% 
+    dplyr::filter(Classification != "") %>% 
+    pivot_wider(names_from = Classification, values_from = n)
+  d5[is.na(d5)] <- 0
+
+  # Change colnames from Immune Cells to Immune
+  colnames(d5)[which(colnames(d5) == "Immune cells")] <- "Immune"
+  
+  # Calculate the total cell count and percentage
+  d5$total <- rowSums(d5[,-1])
+  d5$tumor_per <- d5$Tumor / d5$total
+  d5$immune_per <- d5$Immune / d5$total
+  d5$stroma_per <- d5$Stroma / d5$total
+
+  # Merge coordinate with metadata
+  temp1 <- merge(d5, temp1.coor, by.x = "cellid", by.y = "cellid")
+  #write.csv(temp1, file = paste0("/Users/tili/Desktop/CIIR/results/to_hosein_cell_annotation_results/",
+  #                               patientid, "_cell_annotation.csv"))
+
+  # Align the high resolution image with the high resolution coordinates
+  #selected <- d5$cellid
+  #ima <- magick::image_read("/Users/tili/Desktop/CIIR/data/visium_spatial_out/V19T26-031_A1/tissue_hires_image.png")
+
+  # Get the width and height of the image
+  #image_in <- magick::image_info(ima)
+  #width_hires <- image_in$width
+  #height_hires <- image_in$height
+
+  #temp1$hires_col <- temp1$imagecol * bcsa@images$BCSA3TumB2@scale.factors$hires
+  #temp1$hires_row_reverse <- height_hires - temp1$imagerow * bcsa@images$BCSA3TumB2@scale.factors$hires
+
+  # Plot the scatter plot on top of the HE images
+  #temp1 %>% filter(cellid %in% selected) %>% 
+  #  ggplot(aes(x = hires_col, y = hires_row_reverse)) + 
+  #  annotation_raster(ima, ymin = 0, ymax= height_hires, xmin = 0, xmax = width_hires) + 
+  #  geom_point(col = "lightgreen", size = 0.7, alpha = 0.5) + theme_bw()
+
+  d6 <- temp1[, c(1, 12, 13, 14)]
+  d5 <- merge(d5, d6, by.x = "cellid", by.y = "cellid", all.x = T, all.y = F)
+
+  # Get Stereoscope results (Minor folder with detailed clusters)
+  file_path <- paste0("/Users/tili/Desktop/CIIR/results/stereoscope/", patientid, ".mtx/")
+  file.name <- list.files(file_path)
+  temp1.stero <- read.delim(paste0(file_path, file.name))
+
+  # Aggregate steroscope results
+  temp1.stero$immune_stero <- rowSums(temp1.stero[which(str_detect(colnames(temp1.stero),
+                                      "B_cells|T_cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling_T.cells|DCs"))])
+  temp1.stero$stroma_stero <- rowSums(temp1.stero[which(str_detect(colnames(temp1.stero), 
+                                      "CAFs|Endothelial|PVL|Cycling_PVL"))])
+  temp1.stero$tumor_stero <- rowSums(temp1.stero[which(str_detect(colnames(temp1.stero), 
+                                      "Cancer"))])
+  
+  # Get stero and digital pathology percentage results
+  stero <- temp1.stero[, c(1, (ncol(temp1.stero)-2):(ncol(temp1.stero)))]
+
+  temp1.comb <- merge(stero, d5, by.x = "X", by.y = "coor", all.x = F, all.y = T)
+  temp1.comb <- na.omit(temp1.comb)
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 6:8]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 6:8]) == 0), ]
+  }
+
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  p1 <- ggplot(temp1.comb, aes(x = immune_stero, y = immune_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Stereoscope: Cell-level Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p1)
+  print(cor.test(temp1.comb$immune_stero, temp1.comb$immune_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  immune <- cor.test(temp1.comb$immune_stero, temp1.comb$immune_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$immune[i] <- immune$estimate
+  }
+
+  p2 <- ggplot(temp1.comb, aes(x = stroma_stero, y = stroma_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Stereoscope: Cell-level Stroma correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_stero, temp1.comb$stroma_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma <- cor.test(temp1.comb$stroma_stero, temp1.comb$stroma_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma[i] <- stroma$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_stero, y = tumor_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("Stereoscope: Cell-level Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_stero, temp1.comb$tumor_per, method = "spearman"))
+
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_stero, temp1.comb$tumor_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+  
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot cell-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Cell-level Correlation with Stereoscope", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/Stereoscope_cell_correlation_20241008.csv")
+
+```
+
+# RCTD correlation - Cell-level
+
+```{r RCTD cell-level correlation}
+
+info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
+info$id <- paste0(info$Patientid, info$Tumor.area)
+info <- info[-which(info$id == "BCSA2TumA1"), ]
+info <- info[-which(info$id == "BCSA2TumA2"), ]
+
+# Create a data frame to save the correlation coefficient 
+cor.df <- data.frame(visium.id = info$Visium.ID,
+                     id = info$id,
+                     immune = NA,
+                     stroma = NA,
+                     tumor = NA)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
+  visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
+  d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  # Get the full resolution image pixel number for scale factor calculation
+  width <- info$width[i]
+  height <- info$height[i]
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+    scaling_factor <- 1
+  } else {
+    ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
+
+    # Get the width and height of the image
+    image_in <- magick::image_info(ima)
+    width_30p <- image_in$width
+    height_30p <- image_in$height
+
+    # Use the height of the image to reverse the coordinates of y axis
+    temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+    # Check the orientation of the image
+    ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+    
+    scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  if (info$Patientid[i] == "BCSA1") {
+      d2$x <- d2$Centroid.X.px
+      d2$y <- d2$Centroid.Y.px
+  } else {
+      # The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
+      # Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
+      d2$x <- d2$Centroid.X.µm * 5.809
+      d2$y <- d2$Centroid.Y.µm * 5.809
+  }
+
+  d2$y_reverse <- height - d2$y
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+
+  # Calculate the block coordinate for row and column, row is y axis, col is x axis
+  temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
+  temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
+  temp1.coor$xmin <- temp1.coor$fullcol - radius
+  temp1.coor$xmax <- temp1.coor$fullcol + radius
+
+  # Check the orientation of the digital pathology annotation
+  ggplot(d2, aes(x = x, y = y_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+
+  # If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
+  d2$cellid <- NA
+  for (j in 1:nrow(d2)) {
+    x <- d2$x[j]
+    y <- d2$y_reverse[j]
+    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
+    if (nrow(temp4) == 0) {
+      d2$cellid[j] <- "Not_captured"
+    } else {
+      d2$cellid[j] <- temp4$cellid
+    }
+  }
+
+  # Remove the cells not captured
+  d4 <- d2 %>% filter(cellid != "Not_captured")
+
+  # Count number of tumor, immune, and stroma from each visium spot
+  # cell annotation output in txt file
+  d5 <- d4 %>% group_by(cellid) %>% 
+    dplyr::select(cellid, Classification, x, y_reverse) %>% 
+    dplyr::count(Classification) %>% 
+    dplyr::filter(Classification != "") %>% 
+    pivot_wider(names_from = Classification, values_from = n)
+  d5[is.na(d5)] <- 0
+
+  # Change colnames from Immune Cells to Immune
+  colnames(d5)[which(colnames(d5) == "Immune cells")] <- "Immune"
+  
+  # Calculate the total cell count and percentage
+  d5$total <- rowSums(d5[,-1])
+  d5$tumor_per <- d5$Tumor / d5$total
+  d5$immune_per <- d5$Immune / d5$total
+  d5$stroma_per <- d5$Stroma / d5$total
+
+  # Merge coordinate with metadata
+  temp1 <- merge(d5, temp1.coor, by.x = "cellid", by.y = "cellid")
+  
+  # Get RCTD results (Minor folder with detailed clusters)
+  temp1.rctd <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/RCTD/", info$id[i], "_norm.txt"))
+  
+  # Aggregate RCTD results
+  temp1.rctd$immune_rctd <- rowSums(temp1.rctd[which(str_detect(colnames(temp1.rctd), 
+                                      "B_cells|T_cells|Macrophage|Plasmablasts|NK|Monocyte|Cycling_Myeloid|Cycling_T.cells|DCs"))])
+  temp1.rctd$stroma_rctd <- rowSums(temp1.rctd[which(str_detect(colnames(temp1.rctd), 
+                                      "CAFs|Endothelial|PVL|Cycling_PVL"))])
+  temp1.rctd$tumor_rctd <- rowSums(temp1.rctd[which(str_detect(colnames(temp1.rctd), 
+                                      "Cancer"))])
+  temp1.rctd$X <- rownames(temp1.rctd)
+  
+  # Get RCTD and digital pathology percentage results
+  rctd <- temp1.rctd[, c((ncol(temp1.rctd)-3):(ncol(temp1.rctd)))]
+  digital <- temp1
+  
+  # Merge results from digital pathology and deconvolution for correlation analysis
+  temp1.comb <- merge(rctd, digital, by.x = "X", by.y = "cellid")
+  
+  # Remove position where digital pathology does not detect cells
+  if (length(which(rowSums(temp1.comb[, 5:7]) == 0)) > 0) {
+      temp1.comb <- temp1.comb[-which(rowSums(temp1.comb[, 5:7]) == 0), ]
+  }
+  
+  visiumid <- info$Visium.ID[i]
+  id <- info$id[i]
+  # Plotting and calculate correlation
+  p1 <- ggplot(temp1.comb, aes(x = immune_rctd, y = immune_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("RCTD: Immune correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p1)
+  print(cor.test(temp1.comb$immune_rctd, temp1.comb$immune_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  immune <- cor.test(temp1.comb$immune_rctd, temp1.comb$immune_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$immune[i] <- immune$estimate
+  }
+  
+  p2 <- ggplot(temp1.comb, aes(x = stroma_rctd, y = stroma_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("RCTD: Stroma correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+    ggpubr::stat_cor(method = "spearman")
+  print(p2)
+  print(cor.test(temp1.comb$stroma_rctd, temp1.comb$stroma_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  stroma <- cor.test(temp1.comb$stroma_rctd, temp1.comb$stroma_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$stroma[i] <- stroma$estimate
+  }
+  
+  p3 <- ggplot(temp1.comb, aes(x = tumor_rctd, y = tumor_per)) + geom_point() + theme_bw() +
+    ggtitle(paste0("RCTD: Tumor correlation - ", visiumid, " - ", id)) + geom_smooth(method = "lm") + 
+  ggpubr::stat_cor(method = "spearman")
+  print(p3)
+  print(cor.test(temp1.comb$tumor_rctd, temp1.comb$tumor_per, method = "spearman"))
+  
+  # Save the correlation coefficient to the data frame
+  tumor <- cor.test(temp1.comb$tumor_rctd, temp1.comb$tumor_per, method = "spearman")
+  if (visiumid == cor.df$visium.id[i] & id == cor.df$id[i]) {
+     cor.df$tumor[i] <- tumor$estimate
+  }
+  
+}
+
+# Remove NA in the cor.df
+cor.df <- na.omit(cor.df)
+cor.df <- cor.df[,-1]
+rownames(cor.df) <- cor.df$id
+cor.df <- cor.df[,-1]
+
+# Plot tissue-level correlation as heatmap
+color_scale <- colorRamp2(c(-0.5, 0, 1), c("blue", "white", "red"))
+ComplexHeatmap::Heatmap(as.matrix(cor.df), show_row_names = T, col = color_scale,
+                        cluster_columns = F,
+                        name = "Correlation",
+                        column_title = "Cell-level Correlation with RCTD", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", cor.df[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+write.csv(cor.df, file = "~/Desktop/CIIR/results/RCTD_cell_correlation_20241008.csv")
+
+```
+
+## Example image with deconvolution results on top of HE images
+
+```{r example images}
+
+# Align the high resolution image with the high resolution coordinates
+#ima <- magick::image_read("/Users/tili/Desktop/CIIR/data/visium_spatial_out/V19T26-012_A1/tissue_hires_image.png")
+
+# Get the width and height of the image
+#image_in <- magick::image_info(ima)
+#width_hires <- image_in$width
+#height_hires <- image_in$height
+
+#temp1$hires_col <- temp1$imagecol * bcsa@images$BCSA1TumA1@scale.factors$hires
+#temp1$hires_row_reverse <- height_hires - temp1$imagerow * bcsa@images$BCSA1TumA1@scale.factors$hires
+
+# Get the full resolution image for scale factor calculation
+#full_res_file <- info$Visum.h5ad.ID[i] %>% gsub("1.h5ad", "", .)
+#full_res_name <- list.files("/Users/tili/Desktop/CIIR/data/BCSA_images/")[list.files("/Users/tili/Desktop/CIIR/data/BCSA_images/") #%>%
+#                                                             grep(full_res_file, .)]
+#ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", full_res_name))
+
+# Get the width and height of the image
+#image_in <- magick::image_info(ima)
+#width <- image_in$width
+#height <- image_in$height
+
+# Resize the image
+#img_resized <- image_scale(ima, "527.36x527.36")
+
+#width_resize <- width * 0.01
+#height_resize <- height * 0.01
+
+# Reduce the size of the cell coordinates
+#d2$x_resize <- d2$x * scaling_factor * bcsa@images$BCSA1TumA1@scale.factors$hires
+#d2$y_resize <- d2$y_reverse * scaling_factor * bcsa@images$BCSA1TumA1@scale.factors$hires
+
+# Cell annotation on top of HE image
+#p1 <- d2 %>% 
+#     ggplot(aes(x = x_resize , y = y_resize, col = Classification)) + 
+#     annotation_raster(ima, ymin = 0, ymax= height_hires, xmin = 0, xmax = width_hires) + 
+#     geom_point(size = 0.1) +
+#     theme_bw() #+ ggtitle(patientid)
+
+#p2 <- ggplotly(p1)
+
+for (i in 1:nrow(info)) {
+  sampleid <- info$name[i]
+  # Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
+  visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
+  d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
+
+  # Get the width and height of the image
+  image_in <- magick::image_info(ima)
+  width_30p <- image_in$width
+  height_30p <- image_in$height
+
+  width <- info$width[i]
+  height <- info$height[i]
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+      scaling_factor <- 1
+  } else {
+      scaling_factor <- height_30p / height
+  }
+  
+  # Extract high resolution scaling factor from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[2] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  
+  # Get the width and height of the image
+  ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/tissue_hires_image.png"))
+  image_in <- magick::image_info(ima)
+  width_hires <- image_in$width
+  height_hires <- image_in$height
+
+  if (info$Patientid[i] == "BCSA1") {
+      d2$x <- d2$Centroid.X.px
+      d2$y <- d2$Centroid.Y.px
+  } else {
+      # The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
+      # Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
+      d2$x <- d2$Centroid.X.µm * 5.809
+      d2$y <- d2$Centroid.Y.µm * 5.809
+  }
+
+  d2$y_reverse <- height - d2$y
+
+  # Reduce the size of the cell coordinates, r is the high res scaling factor
+  d2$x_resize <- d2$x * scaling_factor * r
+  d2$y_resize <- d2$y_reverse * scaling_factor * r
+
+  # Cell annotation on top of HE image
+  p1 <- d2 %>% 
+     ggplot(aes(x = x_resize , y = y_resize, col = Classification)) + 
+     annotation_raster(ima, ymin = 0, ymax= height_hires, xmin = 0, xmax = width_hires) + 
+     geom_point(size = 0.1) +
+     theme_bw() + ggtitle(patientid)
+
+  p2 <- ggplotly(p1)
+
+  htmlwidgets::saveWidget(p2, paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/html/", patientid, ".html"))
+
+}
+
+# Tumor percentage on top of HE image
+temp2 %>% 
+     ggplot(aes(x = hires_col, y = hires_row_reverse)) + 
+     annotation_raster(ima, ymin = 0, ymax= height_hires, xmin = 0, xmax = width_hires) + 
+     geom_point(temp2, mapping = aes(col = tumor_stero), size = 0.9) +
+     scale_color_gradient(low = "#fff7bc", high = "#004529") +
+     theme_bw() + ggtitle(patientid)
+
+# Immune percentage on top of HE image
+temp2 %>% 
+     ggplot(aes(x = hires_col, y = hires_row_reverse)) + 
+     annotation_raster(ima, ymin = 0, ymax= height_hires, xmin = 0, xmax = width_hires) + 
+     geom_point(temp2, mapping = aes(col = immune_stero), size = 0.9) +
+     scale_color_gradient(low = "#fff7bc", high = "#004529") +
+     theme_bw() + ggtitle(patientid)
+
+# Stroma percentage on top of HE image
+temp2 %>% 
+     ggplot(aes(x = hires_col, y = hires_row_reverse)) + 
+     annotation_raster(ima, ymin = 0, ymax= height_hires, xmin = 0, xmax = width_hires) + 
+     geom_point(temp2, mapping = aes(col = stroma_stero), size = 0.9) +
+     scale_color_gradient(low = "#fff7bc", high = "#004529") +
+     theme_bw() + ggtitle(patientid)
+
+# HE image
+temp2 %>% 
+     ggplot(aes(x = hires_col, y = hires_row_reverse)) + 
+     annotation_raster(ima, ymin = 0, ymax= height_hires, xmin = 0, xmax = width_hires) + 
+     geom_point(temp2, mapping = aes(col = stroma_stero), size = 0.9, alpha = 0.1) +
+     scale_color_gradient(low = "#fff7bc", high = "#004529") +
+     theme_bw() + ggtitle(patientid)
+
+```
+
+# Comparison between stereoscope, cytoSPACE, Tangram, DWLS, RCTD, Cell2location, and CARD
+
+```{r Comparison}
+
+# Load the results 
+stereo <- read.csv("/Users/tili/Desktop/CIIR/results/Stereoscope_cell_correlation_20241008.csv", row.names = 1)
+stereo$Method <- rep("Stereoscope", nrow(stereo))
+stereo$Strategy <- rep("Cell-level", nrow(stereo))
+
+stereo_t <- read.csv("/Users/tili/Desktop/CIIR/results/Stereoscope_tissue_correlation_20241007.csv", row.names = 1)
+stereo_t$Method <- rep("Stereoscope", nrow(stereo_t))
+stereo_t$Strategy <- rep("Tissue-level", nrow(stereo_t))
+
+cyto <- read.csv("/Users/tili/Desktop/CIIR/results/CytoSPACE_cell_correlation_20241008.csv", row.names = 1)
+cyto$Method <- rep("CytoSPACE", nrow(cyto))
+cyto$Strategy <- rep("Cell-level", nrow(cyto))
+
+cyto_t <- read.csv("/Users/tili/Desktop/CIIR/results/CytoSPACE_tissue_correlation_20241007.csv", row.names = 1)
+cyto_t$Method <- rep("CytoSPACE", nrow(cyto_t))
+cyto_t$Strategy <- rep("Tissue-level", nrow(cyto_t))
+
+card <- read.csv("/Users/tili/Desktop/CIIR/results/CARD_cell_correlation_20241008.csv", row.names = 1)
+card$Method <- rep("CARD", nrow(card))
+card$Strategy <- rep("Cell-level", nrow(card))
+
+card_t <- read.csv("/Users/tili/Desktop/CIIR/results/CARD_tissue_correlation_20241007.csv", row.names = 1)
+card_t$Method <- rep("CARD", nrow(card_t))
+card_t$Strategy <- rep("Tissue-level", nrow(card_t))
+
+tangram <- read.csv("/Users/tili/Desktop/CIIR/results/Tangram_cell_correlation_20241008.csv", row.names = 1)
+tangram$Method <- rep("Tangram", nrow(tangram))
+tangram$Strategy <- rep("Cell-level", nrow(tangram))
+
+tangram_t <- read.csv("/Users/tili/Desktop/CIIR/results/Tangram_tissue_correlation_20241007.csv", row.names = 1)
+tangram_t$Method <- rep("Tangram", nrow(tangram_t))
+tangram_t$Strategy <- rep("Tissue-level", nrow(tangram_t))
+
+dwls <- read.csv("/Users/tili/Desktop/CIIR/results/SpatialDWLS_cell_correlation_20241225.csv", row.names = 1)
+dwls$Method <- rep("SpatialDWLS", nrow(dwls))
+dwls$Strategy <- rep("Cell-level", nrow(dwls))
+
+dwls_t <- read.csv("/Users/tili/Desktop/CIIR/results/SpatialDWLS_tissue_correlation_20241225.csv", row.names = 1)
+dwls_t$Method <- rep("SpatialDWLS", nrow(dwls_t))
+dwls_t$Strategy <- rep("Tissue-level", nrow(dwls_t))
+
+rctd <- read.csv("/Users/tili/Desktop/CIIR/results/RCTD_cell_correlation_20241008.csv", row.names = 1)
+rctd$Method <- rep("RCTD", nrow(rctd))
+rctd$Strategy <- rep("Cell-level", nrow(rctd))
+
+rctd_t <- read.csv("/Users/tili/Desktop/CIIR/results/RCTD_tissue_correlation_20241007.csv", row.names = 1)
+rctd_t$Method <- rep("RCTD", nrow(rctd_t))
+rctd_t$Strategy <- rep("Tissue-level", nrow(rctd_t))
+
+cell2location <- read.csv("/Users/tili/Desktop/CIIR/results/Cell2location_cell_correlation_20250108.csv", row.names = 1)
+cell2location$Method <- rep("Cell2location", nrow(cell2location))
+cell2location$Strategy <- rep("Cell-level", nrow(cell2location))
+
+cell2location_t <- read.csv("/Users/tili/Desktop/CIIR/results/Cell2location_tissue_correlation_20250108.csv", row.names = 1)
+cell2location_t$Method <- rep("Cell2location", nrow(cell2location_t))
+cell2location_t$Strategy <- rep("Tissue-level", nrow(cell2location_t))
+
+### Cell-level correlation
+cor.matrix <- rbind(stereo, cyto, card, tangram, dwls, rctd, cell2location)
+
+im <- cor.matrix %>% dplyr::select(immune, Method, Strategy)
+
+stro <- cor.matrix %>% dplyr::select(stroma, Method, Strategy)
+
+tum <- cor.matrix %>% dplyr::select(tumor, Method, Strategy)
+
+# Boxplot with 7 deconvolution methods - Immune
+p1 <- ggplot(im, aes(x = Method, y = immune, fill = Method)) + 
+  geom_violin() +
+  geom_boxplot(width = 0.15, fill = "white") + 
+  ggbeeswarm::geom_beeswarm(cex = 2, priority = "density", alpha = 0.5) +
+  theme_bw() +
+  ggtitle("Cell-level correlation - Immune") + ylab("Spearman Correlation Coefficient") + 
+  scale_fill_manual(values = c("grey", "#E2C8D8", "#E07E35", "#74b69f", "#A9C4E6", "#F2CCA0", "#D1392B")) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ylim(c(-0.25, 1)) + xlab("")
+
+# Statistics
+an <- aov(im$immune ~ im$Method)
+TukeyHSD(an)
+
+im$Method <- factor(im$Method)
+dunn.test(im$immune, im$Method, method = "bh")
+
+# Boxplot with 7 deconvolution methods - Stroma
+p2 <- ggplot(stro, aes(x = Method, y = stroma, fill = Method)) + 
+  geom_violin() +
+  geom_boxplot(width = 0.15, fill = "white") + 
+  ggbeeswarm::geom_beeswarm(cex = 2, priority = "density", alpha = 0.5) +
+  theme_bw() +
+  ggtitle("Cell-level correlation - Stroma") + ylab("Spearman Correlation Coefficient") + 
+  scale_fill_manual(values = c("grey", "#E2C8D8", "#E07E35", "#74b69f", "#A9C4E6", "#F2CCA0", "#D1392B")) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ylim(c(-0.25, 1)) + xlab("")
+
+# Statistics
+an <- aov(stro$stroma ~ stro$Method)
+TukeyHSD(an)
+
+stro$Method <- factor(stro$Method)
+dunn.test(stro$stroma, stro$Method, method = "bh")
+
+# Boxplot with 7 deconvolution methods - Tumor
+p3 <- ggplot(tum, aes(x = Method, y = tumor, fill = Method)) + 
+  geom_violin() +
+  geom_boxplot(width = 0.15, fill = "white") + 
+  ggbeeswarm::geom_beeswarm(cex = 2, priority = "density", alpha = 0.5) +
+  theme_bw() +
+  ggtitle("Cell-level correlation - Tumor") + ylab("Spearman Correlation Coefficient") + 
+  scale_fill_manual(values = c("grey", "#E2C8D8", "#E07E35", "#74b69f", "#A9C4E6", "#F2CCA0", "#D1392B")) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ylim(c(-0.25, 1)) + xlab("")
+
+# Statistics
+an <- aov(tum$tumor ~ tum$Method)
+TukeyHSD(an)
+
+tum$Method <- factor(tum$Method)
+dunn.test(tum$tumor, tum$Method, method = "bh")
+
+p1 + p2 + p3 + patchwork::plot_layout(guides = "collect")
+
+### Tissue-level correlation
+cor.matrix.t <- rbind(stereo_t, cyto_t, card_t, tangram_t, dwls_t, rctd_t, cell2location_t)
+
+stro_im_t <- cor.matrix.t %>% dplyr::select(stroma_immune, Method, Strategy)
+
+tum_t <- cor.matrix.t %>% dplyr::select(tumor, Method, Strategy)
+
+# Boxplot with 7 deconvolution methods - Stroma and Immune
+p1 <- ggplot(stro_im_t, aes(x = Method, y = stroma_immune, fill = Method)) + 
+  geom_violin() +
+  geom_boxplot(width = 0.15, fill = "white") + 
+  ggbeeswarm::geom_beeswarm(cex = 2, priority = "density", alpha = 0.5) +
+  theme_bw() +
+  ggtitle("Tissue-level correlation - Stroma + Immune") + ylab("Spearman Correlation Coefficient") + 
+  scale_fill_manual(values = c("grey", "#E2C8D8", "#E07E35", "#74b69f", "#A9C4E6", "#F2CCA0", "#D1392B")) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ylim(c(-0.25, 1)) + xlab("")
+
+# Statistics
+an <- aov(stro_im_t$stroma ~ stro_im_t$Method)
+TukeyHSD(an)
+
+stro_im_t$Method <- factor(stro_im_t$Method)
+dunn.test(stro_im_t$stroma, stro_im_t$Method, method = "bh")
+
+# Boxplot with 7 deconvolution methods - Tumor
+p2 <- ggplot(tum_t, aes(x = Method, y = tumor, fill = Method)) + 
+  geom_violin() +
+  geom_boxplot(width = 0.15, fill = "white") + 
+  ggbeeswarm::geom_beeswarm(cex = 2, priority = "density", alpha = 0.5) + 
+  theme_bw() +
+  ggtitle("Tissue-level correlation - Tumor") + ylab("Spearman Correlation Coefficient") + 
+  scale_fill_manual(values = c("grey", "#E2C8D8", "#E07E35", "#74b69f", "#A9C4E6", "#F2CCA0", "#D1392B")) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + ylim(c(-0.25, 1)) + xlab("")
+
+# Statistics
+an <- aov(tum_t$tumor ~ tum_t$Method)
+TukeyHSD(an)
+
+dunn.test(tum_t$tumor, tum_t$Method, method = "bh")
+
+p1 + p2 + patchwork::plot_layout(guides = "collect")
+
+# Plot tumor correlation as heatmap
+ComplexHeatmap::Heatmap(as.matrix(tum), show_row_names = T,
+                        name = "Tumor Correlation", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", tum[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+# Plot stroma correlation as heatmap
+ComplexHeatmap::Heatmap(as.matrix(stro), show_row_names = T,
+                        name = "Stroma Correlation", cluster_rows = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", stro[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+# Plot immune correlation as heatmap
+ComplexHeatmap::Heatmap(as.matrix(im), show_row_names = T,
+                        name = "Immune Correlation", cluster_rows = F,
+                        cluster_columns = F,
+    cell_fun = function(j, i, x, y, width, height, fill) {
+        grid.text(sprintf("%.3f", im[i, j]), x, y, gp = gpar(fontsize = 10))})
+
+```
+
+# Session info
+
+```{r session info}
+sessionInfo()
+```
+
