@@ -1,0 +1,146 @@
+---
+title: "CARD_deconvolution"
+output: html_document
+date: "2025-01-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load dependencies
+
+```{r load libraries}
+suppressMessages(library(Seurat))
+suppressMessages(library(SeuratDisk))
+suppressMessages(library(schard))
+suppressMessages(library(tidyverse))
+suppressMessages(library(dplyr))
+suppressMessages(library(stringr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(knitr))
+suppressMessages(library(corrplot))
+suppressMessages(library(CARD))
+suppressMessages(library(SeuratDisk))
+#suppressMessages(library(Giotto))
+```
+
+Use scRNAseq ref data from Wu et al 2021 to deconvolute ST data 
+
+# Use CARD for ST deconvolution
+
+```{r CARD}
+
+# CARD requires two inputs: ST count data, along with coordinates; scRNAseq count data and meta information indicating cell types and sample info
+
+sc.ref <- Read10X("/Users/tili/Desktop/CIIR/data/Wu_etal_2021_BRCA_scRNASeq/", gene.column = 1)
+# import meta data
+meta <- read.csv("/Users/tili/Desktop/CIIR/data/Wu_etal_2021_BRCA_scRNASeq/metadata.csv", row.names = 1)
+sc.ref <- CreateSeuratObject(sc.ref, meta.data = meta)
+
+# Subset HER2+ data
+Idents(sc.ref) <- sc.ref@meta.data$subtype
+sc.her2 <- subset(sc.ref, idents = "HER2+")
+
+# Subset TNBC data
+sc.tnbc <- subset(sc.ref, idents = "TNBC")
+
+# Use the cells selected and used in stereoscope
+tnbc.cellid <- read_tsv("/Users/tili/Desktop/CIIR/data/Wu_etal_2021_BRCA_scRNASeq/stereoscope/tnbc/BCSA1TumA1_tnbc_meta.tsv")
+tnbc.cellid <- tnbc.cellid$cell
+
+her2.cellid <- read_tsv("/Users/tili/Desktop/CIIR/data/Wu_etal_2021_BRCA_scRNASeq/stereoscope/her2/BCSA2TumB1_her2_meta.tsv")
+her2.cellid <- her2.cellid$cell
+
+# Subset the seurat object to cells used in stereoscope
+tnbc.mtx <- sc.tnbc
+her2.mtx <- sc.her2
+
+tnbc.mtx <- tnbc.mtx[,which(colnames(tnbc.mtx) %in% tnbc.cellid)]
+her2.mtx <- her2.mtx[,which(colnames(her2.mtx) %in% her2.cellid)]
+
+################# Prepare ST data
+
+for (i in 1:nrow(info)) {
+  # ST count data must be matrix or sparseMatrix, row represents a gene and column represent a spatial location (can be spot coor or cell id)
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  
+  # Filter the low quality spots and find highly variable genes
+  bcsa <- subset(bcsa, subset = nFeature_Spatial > 500 & percent_mito < 25 & percent_hb < 0.2)
+  st_count <- bcsa[["Spatial"]]$counts
+
+  # ST metadata: must be data frame while each row represents a spatial location, first column is x coor and second is y coor. The rownames of the
+  # spatial location data frame should match exactly with the column names of the count matrix, the colname should be x and y
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+  st_coor <- temp1.coor %>% dplyr::select(row, col)
+  colnames(st_coor) <- c("x", "y")
+
+  ################### Prepare scRNAseq data
+
+  if (info$type[i] == "TNBC") {
+    # scRNAseq count data must be matrix or sparseMatrix, each row represents a gene and column a cell
+    sc_count <- tnbc.mtx[["RNA"]]$counts
+    
+    # Keep only the common genes between ST and sc data
+    common <- intersect(rownames(sc_count), rownames(st_count))
+    sc_count <- sc_count[which(rownames(sc_count) %in% common),]
+    st_count <- st_count[which(rownames(st_count) %in% common),]
+
+    # scRNAseq meta data must be data frame while each row represents a cells, 
+    # rownames of meta data should match exactly with column names of sc_count
+    # the sc_meta data must contain a column indicating the cell type, sample information, 
+    # the input of scRNAseq in each cell type should be at least 2
+    sc_meta <- tnbc.mtx@meta.data
+    sc_meta$cellID <- rownames(sc_meta)
+    sc_meta <- sc_meta %>% dplyr::select(cellID, orig.ident, celltype_minor)
+    
+  } else if (info$type[i] == "HER2+") {
+    # scRNAseq count data must be matrix or sparseMatrix, each row represents a gene and column a cell
+    sc_count <- her2.mtx[["RNA"]]$counts
+    
+    # Keep only the common genes between ST and sc data
+    common <- intersect(rownames(sc_count), rownames(st_count))
+    sc_count <- sc_count[which(rownames(sc_count) %in% common),]
+    st_count <- st_count[which(rownames(st_count) %in% common),]
+    
+    sc_meta <- her2.mtx@meta.data
+    sc_meta$cellID <- rownames(sc_meta)
+    sc_meta <- sc_meta %>% dplyr::select(cellID, orig.ident, celltype_minor)
+  }
+
+#################### Running CARD deconvolution
+
+  # Create an CARD object
+  # The spatial data are stored in CARD_obj@spatial_countMat and CARD_obj@spatial_location while 
+  # the scRNA-seq data is stored in CARD_obj@sc_eset in the format of SingleCellExperiment.
+  CARD_obj = createCARDObject(
+	  sc_count = sc_count,
+	  sc_meta = sc_meta,
+	  spatial_count = st_count,
+	  spatial_location = st_coor,
+	  ct.varname = "celltype_minor",
+	  ct.select = unique(sc_meta$cellType),
+	  sample.varname = "orig.ident",
+	  minCountGene = 100,
+	  minCountSpot = 5) 
+
+  # Deconvolution using CARD
+  CARD_obj = CARD_deconvolution(CARD_object = CARD_obj)
+
+  # Extract the results
+  temp1.card <- CARD_obj@Proportion_CARD %>% as.data.frame()
+  write.csv(temp1.card, file = paste0("/Users/tili/Desktop/CIIR/results/CARD/", patientid, "_CARD_subset_1000_minor_common_genes.csv"))
+}
+
+```
+
+# Session information
+
+```{r}
+sessionInfo()
+```
+
