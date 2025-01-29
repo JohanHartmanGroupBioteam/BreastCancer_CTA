@@ -1,5 +1,5 @@
 # BreastCancer_CTA
-R codes used for analysis of results from computational tissue annotation of breast cancer sample
+R codes used for analysis of results from computational tissue annotation (CTA) of breast cancer sample
 
 - **ST_deconvolution.Rmd**: code used to prepare single-cell RNAseq reference matrix and spatial transcriptomics matrix for deconvolution
 
