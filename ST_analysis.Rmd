@@ -4441,7 +4441,28 @@ write.csv(d6, file = "/Users/tili/Desktop/CIIR/results/tables/BCSA3TumA1_spatial
 
 e2 <- read.csv("/Users/tili/Desktop/CIIR/results/cell2location/BCSA2TumE2_q05.csv")
 colnames(e2) <- gsub("q05cell_abundance_w_sf_", "", colnames(e2))
-e2 <- e2 %>% dplyr::filter(X == "ACACCACATAATTAGC-1") %>% 
+
+# Aggregate to major level
+e2$Endothelial <- rowSums(e2[which(str_detect(colnames(e2), 
+                               "Endothelial"))])
+e2$CAFs <- rowSums(e2[which(str_detect(colnames(e2), 
+                               "CAF"))])
+e2$PVLs <- rowSums(e2[which(str_detect(colnames(e2), 
+                                      "PVL|Cycling.PVL"))])
+e2$Cancer <- rowSums(e2[which(str_detect(colnames(e2), 
+                                      "Cancer"))])
+e2$B.cells <- rowSums(e2[which(str_detect(colnames(e2), 
+                                      "B.cells"))])
+e2$T.cells_ILCs <- rowSums(e2[which(str_detect(colnames(e2), 
+                                      "T.cells|NK"))])
+e2$Plasmablasts <- rowSums(e2[which(str_detect(colnames(e2), 
+                                      "Plasmablasts"))])
+e2$Myeloid <- rowSums(e2[which(str_detect(colnames(e2), 
+                                      "DCs|Monocyte|Macrophage|Cycling_Myeloid"))])
+
+e2_agg <- e2[,c(1, 28, 31:37)]
+
+e2 <- e2_agg %>% dplyr::filter(X == "ACACCACATAATTAGC-1") %>% 
   pivot_longer(!X, names_to = "Celltype", values_to = "Abundance")
 
 # Calculate normalized cell percentage
@@ -4450,7 +4471,7 @@ e2$Percent <- e2$Abundance / e2$Total
 
 # Plot percent as pie chart
 pie(e2$Percent, labels = paste(e2$Celltype, round(e2$Percent * 100, 2), "%"), 
-    col = viridis(29), 
+    col = c("#FEBD85", "#8DBAD9", "#DCDD8F", "#E99092", "#8ADDE4", "#C4A9A2", "#45AB84", "#1975BA"), 
     main = "B cell Clone0",
     cex = 0.8)
 
@@ -4458,7 +4479,28 @@ pie(e2$Percent, labels = paste(e2$Celltype, round(e2$Percent * 100, 2), "%"),
 
 a1 <- read.csv("/Users/tili/Desktop/CIIR/results/cell2location/BCSA3TumA1_q05.csv")
 colnames(a1) <- gsub("q05cell_abundance_w_sf_", "", colnames(a1))
-a1 <- a1 %>% dplyr::filter(X == "AAGGTGATAAACCAGC-1") %>% 
+
+# Aggregate to major level
+a1$Endothelial <- rowSums(a1[which(str_detect(colnames(a1), 
+                               "Endothelial"))])
+a1$CAFs <- rowSums(a1[which(str_detect(colnames(a1), 
+                               "CAF"))])
+a1$PVLs <- rowSums(a1[which(str_detect(colnames(a1), 
+                                      "PVL|Cycling.PVL"))])
+a1$Cancer <- rowSums(a1[which(str_detect(colnames(a1), 
+                                      "Cancer"))])
+a1$B.cells <- rowSums(a1[which(str_detect(colnames(a1), 
+                                      "B.cells"))])
+a1$T.cells_ILCs <- rowSums(a1[which(str_detect(colnames(a1), 
+                                      "T.cells|NK"))])
+a1$Plasmablasts <- rowSums(a1[which(str_detect(colnames(a1), 
+                                      "Plasmablasts"))])
+a1$Myeloid <- rowSums(a1[which(str_detect(colnames(a1), 
+                                      "DCs|Monocyte|Macrophage|Cycling_Myeloid"))])
+
+a1_agg <- a1[,c(1, 28, 31:37)]
+
+a1 <- a1_agg %>% dplyr::filter(X == "AAGGTGATAAACCAGC-1") %>% 
   pivot_longer(!X, names_to = "Celltype", values_to = "Abundance")
 
 # Calculate normalized cell percentage
@@ -4467,13 +4509,11 @@ a1$Percent <- a1$Abundance / a1$Total
 
 # Plot percent as pie chart
 pie(a1$Percent, labels = paste(a1$Celltype, round(a1$Percent * 100, 2), "%"), 
-    col = viridis(29), 
+    col = c("#FEBD85", "#8DBAD9", "#DCDD8F", "#E99092", "#8ADDE4", "#C4A9A2", "#45AB84", "#1975BA"), 
     main = "T cell Clone602",
     cex = 0.8)
 
 ```
-
-
 
 ## session info
 
