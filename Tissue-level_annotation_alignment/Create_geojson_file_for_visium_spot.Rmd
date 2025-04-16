@@ -1,0 +1,161 @@
+---
+title: "Create_geojson_file_for_visium_spot"
+author: "Tianyi Li"
+date: "2025-04-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load dependencies
+
+```{r load libraries}
+suppressMessages(library(Seurat))
+suppressMessages(library(SeuratDisk))
+suppressMessages(library(schard))
+suppressMessages(library(tidyverse))
+suppressMessages(library(dplyr))
+suppressMessages(library(stringr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(knitr))
+suppressMessages(library(corrplot))
+suppressMessages(library(sf))
+suppressMessages(library(ggforce))
+suppressMessages(library(magick))
+suppressMessages(library(geojsonio))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(circlize))
+```
+
+To align and calculate the percentage of each cell type in each spot for tissue-level annotation, we first need to manually re-create visium spots and save the plot as a geojson file for each sample.
+
+# Make visium spots a geojson file with function for Tissue-level correlation
+
+```{r Make visium spots a geojson file with function}
+
+# Function to create a circle as an sf polygon
+create_circle <- function(x, y, r, n = 6) {
+  theta <- seq(0, 2 * pi, length.out = n)
+  x_coords <- x + r * cos(theta)
+  y_coords <- y + r * sin(theta)
+  coords <- cbind(x_coords, y_coords)
+  coords <- rbind(coords, coords[1, ])  # Ensure the polygon is closed
+  polygon <- st_polygon(list(coords))
+  return(st_sfc(polygon))
+}
+
+plot_list <- list()
+for (i in 1:nrow(info)) {
+  # Get coordinates from Seurat object
+  patientid <- info$id[i]
+  load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
+  df <- get(patientid, bcsa@images)
+  temp1.coor <- df@coordinates
+  temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
+  temp1.coor$cellid <- rownames(temp1.coor)
+
+  # Calculate the coordinate for full resolution image (30p image)
+  temp1.coor$row_30p <- temp1.coor$imagerow 
+  temp1.coor$col_30p <- temp1.coor$imagecol 
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = col_30p, y = row_30p)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+  
+  # Get image file names 
+  if (!patientid %in% c("BCSA4TumA1")) {
+      file_name <- paste0(info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .), "_30p.jpg")
+      ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", file_name))
+      
+      # Get the width and height of the image
+      image_in <- magick::image_info(ima)
+      width_30p <- image_in$width
+      height_30p <- image_in$height
+
+      # Use the height of the image to reverse the coordinates of y axis
+      temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
+
+      # Check the orientation of the image
+      ggplot(temp1.coor, aes(x = col_30p, y = row_30p_reverse)) + geom_point(col = "lightgreen") + theme_bw()
+  }
+
+  # Get the full resolution image for scale factor calculation
+  full_res_file <- info$Visum.h5ad.ID[i] %>% gsub("1.h5ad", "", .)
+  full_res_name <- list.files("/Users/tili/Desktop/CIIR/data/BCSA_images/")[list.files("/Users/tili/Desktop/CIIR/data/BCSA_images/") %>%
+                                                             grep(full_res_file, .)]
+  ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", full_res_name))
+
+  # Get the width and height of the image
+  image_in <- magick::image_info(ima)
+  width <- image_in$width
+  height <- image_in$height
+
+  # Calculate scale factor
+  if (patientid %in% c("BCSA2TumD3", "BCSA2TumD4", "BCSA4TumA1")) {
+    scaling_factor <- 1
+  } else {
+    scaling_factor <- height_30p / height
+  }
+
+  # Calculate the full resolution coordinates
+  temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
+  temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
+  
+  # Extract radius from the scale.factor json file
+  r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F)) %>% str_split(",", simplify = T)
+  r <- r[1] %>% str_split(": ", simplify = T)
+  r <- r[2] %>% as.numeric()
+  radius <- (r / 2) / scaling_factor
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow)) + geom_point(col = "lightgreen") + theme_bw() + scale_y_reverse()
+
+  temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
+
+  # Check the orientation of the image
+  ggplot(temp1.coor, aes(x = fullcol, y = fullrow_reverse)) + geom_point(col = "lightgreen") + theme_bw() 
+  
+  # Align the high resolution image with the high resolution coordinates
+  ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", 
+                                   info$Visium.ID[i], "/tissue_hires_image.png"))
+
+  # Get the width and height of the image
+  image_in <- magick::image_info(ima)
+  width_hires <- image_in$width
+  height_hires <- image_in$height
+  
+  hires <- read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
+                  header = F) %>% str_split(",", simplify = T)
+  hires <- hires[2] %>% str_split(": ", simplify = T)
+  hires <- hires[2] %>% as.numeric()
+
+  temp1.coor$hires_col <- temp1.coor$imagecol * hires
+  temp1.coor$hires_row_reverse <- height_hires - temp1.coor$imagerow * hires
+
+  # Plot the scatter plot on top of the HE images
+  plot_list[[patientid]] <- temp1.coor %>% 
+    ggplot(aes(x = hires_col, y = hires_row_reverse)) + 
+    annotation_raster(ima, ymin = 0, ymax= height_hires, xmin = 0, xmax = width_hires) + 
+    geom_point(col = "lightgreen", size = 0.7, alpha = 0.5) + theme_bw() + ggtitle(patientid)
+
+  # Visualize as scatter plot to check the orientation of coordinates
+  print(ggplot() + ggforce::geom_circle(temp1.coor, mapping = aes(x0 = fullcol, y0 = fullrow, r = radius), 
+                                        fill = "lightgreen") + theme_bw()) 
+
+  # Extract the columns with full resolution coordinates
+  circle_data <- temp1.coor[, which(colnames(temp1.coor) %in% c("cellid", "fullcol", "fullrow", "fullrow_reverse"))]
+  circle_data$radius <- rep(radius, nrow(circle_data))
+
+  # Apply the function to create sf polygons for each circle
+  circle_data$geometry <- mapply(create_circle, circle_data$fullcol, circle_data$fullrow, 
+                               circle_data$radius, SIMPLIFY = FALSE)
+
+  circle_sf <- st_as_sf(circle_data, coords = c("fullcol", "fullrow"), crs = 4326, agr = "constant")
+
+  # Save to GeoJSON
+  geojson_write(circle_sf, file = paste0("/Users/tili/Desktop/CIIR/data/Visium_circle_geojson/", patientid, "_circle_data.geojson"))
+}
+
+```
