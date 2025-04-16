@@ -1,6 +1,8 @@
 # BreastCancer_CTA
 R codes used for analysis of results from computational tissue annotation (CTA) of breast cancer sample
 
+- **VisiumDataQC_v1.3_cleaned**: code used to perform quality control of the Visium data (including mitochondrial, ribosomal, and hemoglobin percent calculation)
+
 - **ST_deconvolution.Rmd**: code used to prepare single-cell RNAseq reference matrix and spatial transcriptomics matrix for deconvolution
 
 - **geojson_tissue_level_correlation.ipynb**: code used to align visium spots and tissue-level CTA results. After exporting the tissue-level CTA results as geojson files and creating visium spots using code in ST_deconvolution.Rmd, this code is applied to calculate the overlay percentage for tumor and stromal+immune compartments 
