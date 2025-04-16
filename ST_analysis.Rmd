@@ -42,6 +42,8 @@ suppressMessages(library(circlize))
 suppressMessages(library(dendextend))
 ```
 
+R objects are processed using VisiumDataQC_v1.3_cleaned.R file. Mitochondrial, ribosomal, and hemoglobin percents are calculated in the QC step.
+
 ## BCSA1TumA1
 
 ```{r BCSA1TumA1}
@@ -880,57 +882,7 @@ ggplot(bcsa1_freq, aes(x = Cluster, y = Percent, fill = Classification)) +
 
 ```
 
-## BCSA1 Metabolic score estimation with METAFlux
-
-```{r METAFlux estimation}
-
-# Perform metabolic score estimation on pseudobulk aggregate samples
-# The gene expression matrix should be gene x sample matrix where row names are human gene names (gene symbols), and column names should be sample names. Please note that METAFlux does not support other gene IDs.
-# The input gene expression matrix should be normalized (e.g., log-transformed, etc.) before using METAFlux. METAflux will not perform any normalization on expression data.
-# Gene expression data cannot have negative values.
-normalized_pseudo <- edgeR::cpm(pseudo_matrix, normalized.lib.sizes = T, log = F)
-log_pseudo <- log2(normalized_pseudo + 1)
-
-# We used Human-GEM (consisting of 13082 metabolic reactions and 8378 metabolites) as our underlying metabolic model
-data("human_gem")
-
-# In METAFlux, ‘medium’ reflects the nutrients (metabolites) in the sample tumor microenvironment (TME) and those nutrients can be allowed to uptake into cells.
-data("human_blood")# for human derived samples
-
-# Calculate a single sample normalized MRAS (Metabolic Reaction Activity Score) from gene expression using GPR (Gene-protein-reaction).
-scores <- calculate_reaction_score(log_pseudo)
-
-# Calculate the metabolic fluxes for the 13082 reactions
-flux <- compute_flux(mras=scores, medium = human_blood)
-
-# Apply cubic root normalization to flux scores.
-cbrt <- function(x) {
-    sign(x) * abs(x)^(1/3)
-}
-
-flux <- cbrt(flux)
-
-# Search “nutrient lookup file” to obtain the metabolite exchange Reaction ID
-data("nutrient_lookup_files")
-
-# “Sign” of flux indicates the direction. For example, for the nutrient uptake/release case (1648 exchange reactions in nutrient lookup file), a positive value means a release of compounds, and a negative value means uptake of compounds.
-glucose <- flux[human_gem[str_detect(human_gem$SUBSYSTEM, "Glycolysis"),]$ID,]
-ComplexHeatmap::Heatmap(glucose, cluster_rows = T,
-                        cluster_columns = T,
-                        show_row_names = T,
-                        show_column_names = T,
-                        clustering_distance_rows = "euclidean",
-                        color = colorRampPalette(c("blue", "white", "red"))(100))
-
-cholesterol <- flux[human_gem[str_detect(human_gem$SUBSYSTEM, "Cholesterol"),]$ID,]
-ComplexHeatmap::Heatmap(cholesterol, cluster_rows = T,
-                        cluster_columns = T,
-                        show_row_names = T,
-                        show_column_names = T,
-                        clustering_distance_rows = "euclidean",
-                        color = colorRampPalette(c("blue", "white", "red"))(100))
-
-```
+Scripts to perform Spatial inferCNV analysis are available in the folder Spatial_inferCNV. The scaled infercnv object is loaded for visualization using the section below.
 
 ## Plot BCSA1 inferCNV results
 
@@ -1029,6 +981,8 @@ Heatmap(tumor_matrix, cluster_rows = F,
         )
 
 ```
+
+Processed R objects are obtained using VisiumDataAnalysisPAM50_v1.4_cleaned.R file. Spatial PAM50 calculation is performed using the raw count matrix. Post-filtering step is performed in the following section using epithelial cells > 20% as cutoff.
 
 ## BCSA1 PAM50
 
@@ -1215,6 +1169,8 @@ SpatialFeaturePlot(bcsa, features = c("PTPRC", "FAP", "EPCAM")) # immune, stroma
 SpatialFeaturePlot(bcsa, features = c("ESR1", "PGR", "ERBB2", "MKI67"), ncol = 4, keep.scale = "all") 
 
 ```
+
+R objects are processed using VisiumDataQC_v1.3_cleaned.R file. Mitochondrial, ribosomal, and hemoglobin percents are calculated in the QC step.
 
 ## BCSA2TumB1
 
@@ -2259,57 +2215,7 @@ ggplot(bcsa2_freq, aes(x = Cluster, y = Percent, fill = Classification)) +
 
 ```
 
-## BCSA2 Metabolic score estimation with METAFlux
-
-```{r METAFlux estimation}
-
-# Perform metabolic score estimation on pseudobulk aggregate samples
-# The gene expression matrix should be gene x sample matrix where row names are human gene names (gene symbols), and column names should be sample names. Please note that METAFlux does not support other gene IDs.
-# The input gene expression matrix should be normalized (e.g., log-transformed, etc.) before using METAFlux. METAflux will not perform any normalization on expression data.
-# Gene expression data cannot have negative values.
-normalized_pseudo <- edgeR::cpm(pseudo_matrix, normalized.lib.sizes = T, log = F)
-log_pseudo <- log2(normalized_pseudo + 1)
-
-# We used Human-GEM (consisting of 13082 metabolic reactions and 8378 metabolites) as our underlying metabolic model
-data("human_gem")
-
-# In METAFlux, ‘medium’ reflects the nutrients (metabolites) in the sample tumor microenvironment (TME) and those nutrients can be allowed to uptake into cells.
-data("human_blood")# for human derived samples
-
-# Calculate a single sample normalized MRAS (Metabolic Reaction Activity Score) from gene expression using GPR (Gene-protein-reaction).
-scores <- calculate_reaction_score(log_pseudo)
-
-# Calculate the metabolic fluxes for the 13082 reactions
-flux <- compute_flux(mras=scores, medium = human_blood)
-
-# Apply cubic root normalization to flux scores.
-cbrt <- function(x) {
-    sign(x) * abs(x)^(1/3)
-}
-
-flux <- cbrt(flux)
-
-# Search “nutrient lookup file” to obtain the metabolite exchange Reaction ID
-data("nutrient_lookup_files")
-
-# “Sign” of flux indicates the direction. For example, for the nutrient uptake/release case (1648 exchange reactions in nutrient lookup file), a positive value means a release of compounds, and a negative value means uptake of compounds.
-glucose <- flux[human_gem[str_detect(human_gem$SUBSYSTEM, "Glycolysis"),]$ID,]
-ComplexHeatmap::Heatmap(glucose, cluster_rows = T,
-                        cluster_columns = T,
-                        show_row_names = T,
-                        show_column_names = T,
-                        clustering_distance_rows = "euclidean",
-                        color = colorRampPalette(c("blue", "white", "red"))(100))
-
-cholesterol <- flux[human_gem[str_detect(human_gem$SUBSYSTEM, "Cholesterol"),]$ID,]
-ComplexHeatmap::Heatmap(cholesterol, cluster_rows = T,
-                        cluster_columns = T,
-                        show_row_names = T,
-                        show_column_names = T,
-                        clustering_distance_rows = "euclidean",
-                        color = colorRampPalette(c("blue", "white", "red"))(100))
-
-```
+Scripts to perform Spatial inferCNV analysis are available in the folder Spatial_inferCNV. The scaled infercnv object is loaded for visualization using the section below.
 
 ## BCSA2 inferCNV
 
@@ -2443,6 +2349,8 @@ Heatmap(t(as.matrix(tumor_matrix)), cluster_rows = T,
 )
 dev.off()
 ```
+
+Processed R objects are obtained using VisiumDataAnalysisPAM50_v1.4_cleaned.R file. Spatial PAM50 calculation is performed using the raw count matrix. Post-filtering step is performed in the following section using epithelial cells > 20% as cutoff.
 
 ## BCSA2 PAM50
 
@@ -2663,6 +2571,8 @@ SpatialFeaturePlot(bcsa, features = c("PTPRC", "FAP", "EPCAM")) # immune, stroma
 SpatialFeaturePlot(bcsa, features = c("ESR1", "PGR", "ERBB2", "MKI67"), ncol = 4, keep.scale = "all")
 
 ```
+
+R objects are processed using VisiumDataQC_v1.3_cleaned.R file. Mitochondrial, ribosomal, and hemoglobin percents are calculated in the QC step.
 
 ## BCSA3TumA1
 
@@ -3092,7 +3002,6 @@ SpatialDimPlot(bcsa, group.by = "SCT_snn_res.0.6", alpha = c(0.2, 1))
 save(bcsa, file = "/Users/tili/Desktop/CIIR/results/colocalization/BCSA3TumD2_SCT.Rdata")
 
 ```
-
 
 ## BCSA3 integration
 
@@ -3637,6 +3546,8 @@ ggplot(bcsa3_freq, aes(x = Cluster, y = Percent, fill = Classification)) +
 
 ```
 
+Scripts to perform Spatial inferCNV analysis are available in the folder Spatial_inferCNV. The scaled infercnv object is loaded for visualization using the section below.
+
 ## Plot BCSA3 inferCNV results
 
 ```{r BCSA3 inferCNV}
@@ -3767,6 +3678,8 @@ Heatmap(t(as.matrix(tumor_matrix)), cluster_rows = T,
 )
 dev.off()
 ```
+
+Processed R objects are obtained using VisiumDataAnalysisPAM50_v1.4_cleaned.R file. Spatial PAM50 calculation is performed using the raw count matrix. Post-filtering step is performed in the following section using epithelial cells > 20% as cutoff.
 
 ## BCSA3 PAM50
 
@@ -4041,477 +3954,6 @@ p4 <- ggplot() + geom_point(qupath, mapping = aes(x = x_crop, y = y_crop, col = 
   scale_color_manual(values = c("Tumor" = "#429948", 
          "Immune cells" = "#FFDE18", "Stroma" = "#9BCCE3"))
 p3 + p4
-
-```
-
-## Get spots without tumor cells from QuPath for inferCNV
-
-```{r Ref spots for inferCNV}
-
-info <- openxlsx::read.xlsx("~/Desktop/CIIR/data/ST-AR_Visium_samples_with file names.xlsx") %>% na.omit()
-info$id <- paste0(info$Patientid, info$Tumor.area)
-info <- info[-which(info$id == "BCSA2TumA1"), ]
-info <- info[-which(info$id == "BCSA2TumA2"), ]
-
-BCSA1_ref <- character()
-BCSA2_ref <- character()
-BCSA3_ref <- character()
-for (i in 1:nrow(info)) {
-  patient <- info$Patientid[i]
-  id <- info$id[i]
-  
-  # Read qupath annotation and rename spot ID
-  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/cell2location/Merged_correlation_results/",
-                           id, "_correlation_matrix.csv"))
-  temp1$X <- paste0(gsub(patient, "", id), "_", temp1$X)
-  ref <- temp1[which(temp1$Tumor == 0),]$X
-  
-  # Combine the reference spots together
-  if (patient == "BCSA1") {
-    BCSA1_ref <- c(BCSA1_ref, ref)
-  } else if (patient == "BCSA2") {
-    BCSA2_ref <- c(BCSA2_ref, ref)
-  } else if (patient == "BCSA3") {
-    BCSA3_ref <- c(BCSA3_ref, ref)
-  }
-}
-
-write.table(BCSA1_ref, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA1_ref_spot.txt", 
-            row.names = F, col.names = F)
-write.table(BCSA2_ref, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA2_ref_spot.txt", 
-            row.names = F, col.names = F)
-write.table(BCSA3_ref, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA3_ref_spot.txt", 
-            row.names = F, col.names = F)
-
-########### Select spots with at least 40% tumor to run inferCNV, remove rep2
-
-# BCSA1
-decon <- data.frame()
-for (i in names(bcsa1@images)) {
-  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/cell2location/Merged_correlation_results/", 
-                           i, "_correlation_matrix.csv"))
-  region <- gsub("BCSA1", "", i)
-  temp1$X <- paste0(region, "_", temp1$X)
-  decon <- rbind(decon, temp1)
-}
-
-bcsa1_cnv_spot <- decon %>% dplyr::filter(tumor_per > 0.7)
-bcsa1_cnv_spot$region <- str_sub(bcsa1_cnv_spot$X, end = 5)
-bcsa1_cnv_spot <- bcsa1_cnv_spot %>% 
-  dplyr::filter(region != "TumA2") %>% 
-  dplyr::filter(region != "TumB2")
-
-unique(bcsa1_cnv_spot$region)
-
-write.table(bcsa1_cnv_spot$X, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA1_filtered_tumor_70_percent_spots_rep1_for_inferCNV.txt", col.names = F, row.names = F)
-
-# BCSA2
-decon <- data.frame()
-for (i in names(bcsa2@images)) {
-  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/cell2location/Merged_correlation_results/", 
-                           i, "_correlation_matrix.csv"))[,c(1:12)]
-  region <- gsub("BCSA2", "", i)
-  temp1$X <- paste0(region, "_", temp1$X)
-  decon <- rbind(decon, temp1)
-}
-
-bcsa2_cnv_spot <- decon %>% dplyr::filter(tumor_per > 0.7)
-bcsa2_cnv_spot$region <- str_sub(bcsa2_cnv_spot$X, end = 5)
-bcsa2_cnv_spot <- bcsa2_cnv_spot %>% 
-  dplyr::filter(region != "TumC2") %>% 
-  dplyr::filter(region != "TumB2") %>% 
-  dplyr::filter(region != "TumD2") %>% 
-  dplyr::filter(region != "TumD3") %>% 
-  dplyr::filter(region != "TumD4") %>% 
-  dplyr::filter(region != "TumE2")
-
-unique(bcsa2_cnv_spot$region)
-write.table(bcsa2_cnv_spot$X, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA2_filtered_tumor_70_percent_spots_rep1_for_inferCNV.txt", 
-            col.names = F, row.names = F)
-
-# BCSA3
-decon <- data.frame()
-gro <- names(bcsa3@images)[-4]
-for (i in gro) {
-  temp1 <- read.csv(paste0("/Users/tili/Desktop/CIIR/results/cell2location/Merged_correlation_results/", 
-                           i, "_correlation_matrix.csv"))
-  region <- gsub("BCSA3", "", i)
-  temp1$X <- paste0(region, "_", temp1$X)
-  decon <- rbind(decon, temp1)
-}
-
-bcsa3_cnv_spot <- decon %>% dplyr::filter(tumor_per > 0.7)
-bcsa3_cnv_spot$region <- str_sub(bcsa3_cnv_spot$X, end = 5)
-bcsa3_cnv_spot <- bcsa3_cnv_spot %>% 
-  dplyr::filter(region != "TumA2") %>% 
-  dplyr::filter(region != "TumB2") %>% 
-  dplyr::filter(region != "TumC2") %>% 
-  dplyr::filter(region != "TumD2") 
-unique(bcsa3_cnv_spot$region)
-
-write.table(bcsa3_cnv_spot$X, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA3_filtered_tumor_70_percent_spots_rep1_for_inferCNV.txt", 
-            col.names = F, row.names = F)
-
-```
-
-## BCSA2 SpatialVDJ plotting 
-
-```{r SpatialVDJ and Quath}
-
-vdj <- read_tsv("/Users/tili/Desktop/CIIR/data/SpatialVDJ_forZenodo/data/breast_cancer/1_LR-SpatialVDJ/postfiltered_matrices/newtables_run86-BC-SA2_TumE2-filtered-filter-readcount-0-umi-count.tsv")
-
-meta <- read.csv("/Users/tili/Desktop/CIIR/data/SpatialVDJ_forZenodo/data/breast_cancer/1_LR-SpatialVDJ/clone_list/P1_all_ontissue_clone_list.csv")
-
-# Fix the different name of ST barcodes
-vdj$st_barcode <- paste0(vdj$st_barcode, "-1")
-
-# Plot clone 0
-clone0 <- vdj$'0'
-names(clone0) <- vdj$st_barcode
-
-e2 <- read.csv("~/Desktop/CIIR/results/cell2location/Merged_correlation_results/BCSA2TumE2_correlation_matrix.csv") %>% 
-  dplyr::select(X, immune_cel2, stroma_cel2, tumor_cel2, col_30p, row_30p_reverse) 
-e2$col <- e2$col_30p * 0.1370614
-e2$row_reverse <- e2$row_30p_reverse * 0.1370614
-e2$X <- paste0("TumE2_", e2$X)
-
-clone_spot <- paste0("TumE2_", names(clone0[clone0 > 0]))
-e2 <- e2[which(e2$X %in% clone_spot),]
-
-# Add HE image on the back
-ima <- magick::image_read("/Users/tili/Desktop/CIIR/data/visium_spatial_out/V10F24-114_D1/tissue_hires_image.png")
-image_in <- magick::image_info(ima)
-width <- image_in$width
-height <- image_in$height
-
-spots <- as.data.frame(clone0)
-spots$spotid <- paste0("TumE2_", rownames(spots))
-spots <- spots[which(spots$spotid %in% e2$X),]
-e2 <- merge(e2, spots, by.x = "X", by.y = "spotid", all.x = T, all.y = T)
-
-# Plot the visium spots
-ggplot(e2, aes(y = row_reverse, x =col)) + 
-  annotation_raster(ima, ymin = 0, ymax= height, xmin = 0, xmax = width) +
-  geom_point(col = "#FFDE18") + theme_bw() + ylim(c(0, 1900)) + xlim(c(0, 1900))
-
-# Merge Qupath cell level annotation with visium spot ID
-i = 12
-sampleid <- info$name[i]
-# Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
-patientid <- info$id[i]
-load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
-df <- get(patientid, bcsa@images)
-temp1.coor <- df@coordinates
-temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
-temp1.coor$cellid <- rownames(temp1.coor)
-
-# Calculate the coordinate for full resolution image (30p image)
-temp1.coor$row_30p <- temp1.coor$imagerow 
-temp1.coor$col_30p <- temp1.coor$imagecol 
-
-# Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
-visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
-d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
-
-# Get the full resolution image pixel number for scale factor calculation
-width <- info$width[i]
-height <- info$height[i]
-
-# Calculate scale factor
-ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
-      
-# Get the width and height of the image
-image_in <- magick::image_info(ima)
-width_30p <- image_in$width
-height_30p <- image_in$height
-
-# Use the height of the image to reverse the coordinates of y axis
-temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
-
-scaling_factor <- height_30p / height
-
-# Calculate the full resolution coordinates
-temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
-temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
-  
-# Extract radius from the scale.factor json file
-r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
-                  header = F)) %>% str_split(",", simplify = T)
-r <- r[1] %>% str_split(": ", simplify = T)
-r <- r[2] %>% as.numeric()
-radius <- (r / 2) / scaling_factor
-  
-temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
-
-# The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
-# Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
-d2$x <- d2$Centroid.X.µm * 5.809
-d2$y <- d2$Centroid.Y.µm * 5.809
-
-d2$y_reverse <- height - d2$y
-
-# Calculate the block coordinate for row and column, row is y axis, col is x axis
-temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
-temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
-temp1.coor$xmin <- temp1.coor$fullcol - radius
-temp1.coor$xmax <- temp1.coor$fullcol + radius
-
-# If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
-d2$cellid <- NA
-for (j in 1:nrow(d2)) {
-    x <- d2$x[j]
-    y <- d2$y_reverse[j]
-    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
-    if (nrow(temp4) == 0) {
-      d2$cellid[j] <- "Not_captured"
-    } else {
-      d2$cellid[j] <- temp4$cellid
-    }
-}
-
-# Remove the cells not captured
-d4 <- d2 %>% filter(cellid != "Not_captured")
-d4$cellid <- paste0("TumE2_", d4$cellid)
-
-# Filter out cells belong to spots with clone event
-d5 <- d4[which(d4$cellid %in% e2$X),]
-top2 <- spots %>% dplyr::arrange(spots$clone0) %>% tail(n = 2)
-
-# Filter out two spots with the most clone events
-d6 <- d5[which(d5$cellid %in% top2$spotid),]
-
-# Plot the two selected spots on HE image
-e2 %>% dplyr::filter(X %in% d6$cellid) %>% 
-  ggplot(aes(y = row_reverse, x =col)) + 
-  annotation_raster(ima, ymin = 0, ymax= height, xmin = 0, xmax = width) +
-  geom_point(col = "#FFDE18") + theme_bw() + ylim(c(0, 1900)) + xlim(c(0, 1900))
-
-# Save the objectID for qupath annotation
-write.csv(d6, file = "/Users/tili/Desktop/CIIR/results/tables/BCSA2TumE2_spatialVDJ_clone0_top2_event_spots_qupath_cell_annotation_output.csv")
-
-```
-
-## BCSA3 SpatialVDJ plotting 
-
-```{r BCSA3 SpatialVDJ and Quath}
-
-vdj <- read_tsv("/Users/tili/Desktop/CIIR/data/SpatialVDJ_forZenodo/data/breast_cancer/1_LR-SpatialVDJ/postfiltered_matrices/newtables_run86-BC-SA3_TumA1-filtered-filter-readcount-0-umi-count.tsv")
-
-meta <- read.csv("/Users/tili/Desktop/CIIR/data/SpatialVDJ_forZenodo/data/breast_cancer/1_LR-SpatialVDJ/clone_list/P2_all_ontissue_clone_list.csv")
-
-# Fix the different name of ST barcodes
-vdj$st_barcode <- paste0(vdj$st_barcode, "-1")
-
-# Plot clone 602
-clone602 <- vdj$'602'
-names(clone602) <- vdj$st_barcode
-
-a1 <- read.csv("~/Desktop/CIIR/results/cell2location/Merged_correlation_results/BCSA3TumA1_correlation_matrix.csv") %>% 
-  dplyr::select(X, immune_cel2, stroma_cel2, tumor_cel2, col_30p, row_30p_reverse) 
-a1$col <- a1$col_30p * 0.1264143
-a1$row_reverse <- a1$row_30p_reverse * 0.1264143
-a1$X <- paste0("TumA1_", a1$X)
-
-clone_spot <- paste0("TumA1_", names(clone602[clone602 > 0]))
-a1 <- a1[which(a1$X %in% clone_spot),]
-
-# Add HE image on the back
-ima <- magick::image_read("/Users/tili/Desktop/CIIR/data/visium_spatial_out/V19T26-031_D1/tissue_hires_image.png")
-image_in <- magick::image_info(ima)
-width <- image_in$width
-height <- image_in$height
-
-spots <- as.data.frame(clone602)
-spots$spotid <- paste0("TumA1_", rownames(spots))
-spots <- spots[which(spots$spotid %in% a1$X),]
-a1 <- merge(a1, spots, by.x = "X", by.y = "spotid", all.x = T, all.y = T)
-
-# Plot the visium spots
-ggplot(a1, aes(y = row_reverse, x =col)) + 
-  annotation_raster(ima, ymin = 0, ymax = height, xmin = 0, xmax = width) +
-  geom_point(col = "#FFDE18", size = 0.8) + theme_bw() + ylim(c(0, 1900)) + xlim(c(0, 1900))
-
-# Merge Qupath cell level annotation with visium spot ID
-i = 13
-sampleid <- info$name[i]
-# Get coordinates from Seurat object, 30p image was used to run spaceranger, which corresponding to the "full resolution" image 
-patientid <- info$id[i]
-load(paste0("/Users/tili/Desktop/CIIR/data/PAM50Bulk/results/", patientid, ".RData"))
-df <- get(patientid, bcsa@images)
-temp1.coor <- df@coordinates
-temp1.coor$coor <- paste0(temp1.coor$imagerow, "x", temp1.coor$imagecol)
-temp1.coor$cellid <- rownames(temp1.coor)
-
-# Calculate the coordinate for full resolution image (30p image)
-temp1.coor$row_30p <- temp1.coor$imagerow 
-temp1.coor$col_30p <- temp1.coor$imagecol 
-
-# Digital pathology was ran on the full resolution image from the microscope, thus has a scaling factor to 30p image
-visium_h5ad_id <- info$Visum.h5ad.ID[i] %>% gsub("-Spot000001.h5ad", "", .)
-d2 <- read.delim(paste0("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_", visium_h5ad_id, ".txt"))
-
-# Get the full resolution image pixel number for scale factor calculation
-width <- info$width[i]
-height <- info$height[i]
-
-# Calculate scale factor
-ima <- magick::image_read(paste0("/Users/tili/Desktop/CIIR/data/BCSA_images/", visium_h5ad_id, "_30p.jpg"))
-      
-# Get the width and height of the image
-image_in <- magick::image_info(ima)
-width_30p <- image_in$width
-height_30p <- image_in$height
-
-# Use the height of the image to reverse the coordinates of y axis
-temp1.coor$row_30p_reverse <- height_30p - temp1.coor$row_30p
-
-scaling_factor <- height_30p / height
-
-# Calculate the full resolution coordinates
-temp1.coor$fullcol <- temp1.coor$col_30p / scaling_factor
-temp1.coor$fullrow <- temp1.coor$row_30p / scaling_factor
-  
-# Extract radius from the scale.factor json file
-r <- suppressWarnings(read.delim(paste0("/Users/tili/Desktop/CIIR/data/visium_spatial_out/", info$Visium.ID[i], "/scalefactors_json.json"), 
-                  header = F)) %>% str_split(",", simplify = T)
-r <- r[1] %>% str_split(": ", simplify = T)
-r <- r[2] %>% as.numeric()
-radius <- (r / 2) / scaling_factor
-  
-temp1.coor$fullrow_reverse <- height - temp1.coor$fullrow
-
-# The pixel size for the tiff images was wrong, we manually changed to the correct one during annotation
-# Therefore, we need to times a scaling factor to obtain the coordinates in pixels 
-d2$x <- d2$Centroid.X.µm * 5.809
-d2$y <- d2$Centroid.Y.µm * 5.809
-
-d2$y_reverse <- height - d2$y
-
-# Calculate the block coordinate for row and column, row is y axis, col is x axis
-temp1.coor$ymin <- temp1.coor$fullrow_reverse - radius
-temp1.coor$ymax <- temp1.coor$fullrow_reverse + radius
-temp1.coor$xmin <- temp1.coor$fullcol - radius
-temp1.coor$xmax <- temp1.coor$fullcol + radius
-
-# If the cell falls in the square of the Visium capture area, then assign the cell id to the annotated cells
-d2$cellid <- NA
-for (j in 1:nrow(d2)) {
-    x <- d2$x[j]
-    y <- d2$y_reverse[j]
-    temp4 <- temp1.coor[which(x > temp1.coor$xmin & x < temp1.coor$xmax & y > temp1.coor$ymin & y < temp1.coor$ymax), ]
-    if (nrow(temp4) == 0) {
-      d2$cellid[j] <- "Not_captured"
-    } else {
-      d2$cellid[j] <- temp4$cellid
-    }
-}
-
-# Remove the cells not captured
-d4 <- d2 %>% filter(cellid != "Not_captured")
-d4$cellid <- paste0("TumA1_", d4$cellid)
-
-# Filter out cells belong to spots with clone event
-d5 <- d4[which(d4$cellid %in% a1$X),]
-top2 <- spots %>% dplyr::arrange(spots$clone61) %>% tail(n = 2)
-
-# Filter out two spots with the most clone events
-d6 <- d5[which(d5$cellid %in% top2$spotid),]
-
-ima <- magick::image_read("/Users/tili/Desktop/CIIR/data/visium_spatial_out/V19T26-031_D1/tissue_hires_image.png")
-image_in <- magick::image_info(ima)
-width <- image_in$width
-height <- image_in$height
-
-# Plot the selected spot on HE image (clone61: TumA1_GCTGCACGGTTTCTTA-1; clone602: TumA1_AAGGTGATAAACCAGC-1)
-a1 %>% dplyr::filter(X == "TumA1_AAGGTGATAAACCAGC-1") %>% 
-  ggplot(aes(y = row_reverse, x =col)) + 
-  annotation_raster(ima, ymin = 0, ymax= height, xmin = 0, xmax = width) +
-  geom_point(col = "#FFDE18") + theme_bw() + ylim(c(0, 1900)) + xlim(c(0, 1900))
-
-# Save the objectID for qupath annotation
-write.csv(d6, file = "/Users/tili/Desktop/CIIR/results/tables/BCSA3TumA1_spatialVDJ_T_cells_clone602_event_spots_qupath_cell_annotation_output.csv")
-
-```
-
-## Deconvolution for selected spots with VDJ clones
-
-```{r Deconvolution for VDJ clones}
-
-############### BCSA2TumE2 - Clone0: TumE2_ACACCACATAATTAGC-1
-
-e2 <- read.csv("/Users/tili/Desktop/CIIR/results/cell2location/BCSA2TumE2_q05.csv")
-colnames(e2) <- gsub("q05cell_abundance_w_sf_", "", colnames(e2))
-
-# Aggregate to major level
-e2$Endothelial <- rowSums(e2[which(str_detect(colnames(e2), 
-                               "Endothelial"))])
-e2$CAFs <- rowSums(e2[which(str_detect(colnames(e2), 
-                               "CAF"))])
-e2$PVLs <- rowSums(e2[which(str_detect(colnames(e2), 
-                                      "PVL|Cycling.PVL"))])
-e2$Cancer <- rowSums(e2[which(str_detect(colnames(e2), 
-                                      "Cancer"))])
-e2$B.cells <- rowSums(e2[which(str_detect(colnames(e2), 
-                                      "B.cells"))])
-e2$T.cells_ILCs <- rowSums(e2[which(str_detect(colnames(e2), 
-                                      "T.cells|NK"))])
-e2$Plasmablasts <- rowSums(e2[which(str_detect(colnames(e2), 
-                                      "Plasmablasts"))])
-e2$Myeloid <- rowSums(e2[which(str_detect(colnames(e2), 
-                                      "DCs|Monocyte|Macrophage|Cycling_Myeloid"))])
-
-e2_agg <- e2[,c(1, 28, 31:37)]
-
-e2 <- e2_agg %>% dplyr::filter(X == "ACACCACATAATTAGC-1") %>% 
-  pivot_longer(!X, names_to = "Celltype", values_to = "Abundance")
-
-# Calculate normalized cell percentage
-e2$Total <- sum(e2$Abundance)
-e2$Percent <- e2$Abundance / e2$Total
-
-# Plot percent as pie chart
-pie(e2$Percent, labels = paste(e2$Celltype, round(e2$Percent * 100, 2), "%"), 
-    col = c("#FEBD85", "#8DBAD9", "#DCDD8F", "#E99092", "#8ADDE4", "#C4A9A2", "#45AB84", "#1975BA"), 
-    main = "B cell Clone0",
-    cex = 0.8)
-
-############### BCSA3TumA1 - Clone61: TumA1_GCTGCACGGTTTCTTA-1 (Clone602: TumA1_AAGGTGATAAACCAGC-1)
-
-a1 <- read.csv("/Users/tili/Desktop/CIIR/results/cell2location/BCSA3TumA1_q05.csv")
-colnames(a1) <- gsub("q05cell_abundance_w_sf_", "", colnames(a1))
-
-# Aggregate to major level
-a1$Endothelial <- rowSums(a1[which(str_detect(colnames(a1), 
-                               "Endothelial"))])
-a1$CAFs <- rowSums(a1[which(str_detect(colnames(a1), 
-                               "CAF"))])
-a1$PVLs <- rowSums(a1[which(str_detect(colnames(a1), 
-                                      "PVL|Cycling.PVL"))])
-a1$Cancer <- rowSums(a1[which(str_detect(colnames(a1), 
-                                      "Cancer"))])
-a1$B.cells <- rowSums(a1[which(str_detect(colnames(a1), 
-                                      "B.cells"))])
-a1$T.cells_ILCs <- rowSums(a1[which(str_detect(colnames(a1), 
-                                      "T.cells|NK"))])
-a1$Plasmablasts <- rowSums(a1[which(str_detect(colnames(a1), 
-                                      "Plasmablasts"))])
-a1$Myeloid <- rowSums(a1[which(str_detect(colnames(a1), 
-                                      "DCs|Monocyte|Macrophage|Cycling_Myeloid"))])
-
-a1_agg <- a1[,c(1, 28, 31:37)]
-
-a1 <- a1_agg %>% dplyr::filter(X == "AAGGTGATAAACCAGC-1") %>% 
-  pivot_longer(!X, names_to = "Celltype", values_to = "Abundance")
-
-# Calculate normalized cell percentage
-a1$Total <- sum(a1$Abundance)
-a1$Percent <- a1$Abundance / a1$Total
-
-# Plot percent as pie chart
-pie(a1$Percent, labels = paste(a1$Celltype, round(a1$Percent * 100, 2), "%"), 
-    col = c("#FEBD85", "#8DBAD9", "#DCDD8F", "#E99092", "#8ADDE4", "#C4A9A2", "#45AB84", "#1975BA"), 
-    main = "T cell Clone602",
-    cex = 0.8)
 
 ```
 
