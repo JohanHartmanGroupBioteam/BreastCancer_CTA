@@ -49,7 +49,8 @@ for (i in names(bcsa1@images)) {
   decon <- rbind(decon, temp1)
 }
 
-bcsa1_cnv_spot <- decon %>% dplyr::filter(tumor_per > 0.7)
+# Filter spots with at least 50%, 70%, and 90% of tumor
+bcsa1_cnv_spot <- decon %>% dplyr::filter(tumor_per > 0.5)
 bcsa1_cnv_spot$region <- str_sub(bcsa1_cnv_spot$X, end = 5)
 bcsa1_cnv_spot <- bcsa1_cnv_spot %>% 
   dplyr::filter(region != "TumA2") %>% 
@@ -57,7 +58,7 @@ bcsa1_cnv_spot <- bcsa1_cnv_spot %>%
 
 unique(bcsa1_cnv_spot$region)
 
-write.table(bcsa1_cnv_spot$X, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA1_filtered_tumor_70_percent_spots_rep1_for_inferCNV.txt", col.names = F, row.names = F)
+write.table(bcsa1_cnv_spot$X, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA1_filtered_tumor_50_percent_spots_rep1_for_inferCNV.txt", col.names = F, row.names = F)
 
 # BCSA2
 load("~/Desktop/CIIR/results/colocalization/BCSA2_merge.Rdata")
@@ -70,7 +71,7 @@ for (i in names(bcsa2@images)) {
   decon <- rbind(decon, temp1)
 }
 
-bcsa2_cnv_spot <- decon %>% dplyr::filter(tumor_per > 0.7)
+bcsa2_cnv_spot <- decon %>% dplyr::filter(tumor_per > 0.5)
 bcsa2_cnv_spot$region <- str_sub(bcsa2_cnv_spot$X, end = 5)
 bcsa2_cnv_spot <- bcsa2_cnv_spot %>% 
   dplyr::filter(region != "TumC2") %>% 
@@ -81,7 +82,7 @@ bcsa2_cnv_spot <- bcsa2_cnv_spot %>%
   dplyr::filter(region != "TumE2")
 
 unique(bcsa2_cnv_spot$region)
-write.table(bcsa2_cnv_spot$X, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA2_filtered_tumor_70_percent_spots_rep1_for_inferCNV.txt", 
+write.table(bcsa2_cnv_spot$X, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA2_filtered_tumor_50_percent_spots_rep1_for_inferCNV.txt", 
             col.names = F, row.names = F)
 
 # BCSA3
@@ -96,7 +97,7 @@ for (i in gro) {
   decon <- rbind(decon, temp1)
 }
 
-bcsa3_cnv_spot <- decon %>% dplyr::filter(tumor_per > 0.7)
+bcsa3_cnv_spot <- decon %>% dplyr::filter(tumor_per > 0.5)
 bcsa3_cnv_spot$region <- str_sub(bcsa3_cnv_spot$X, end = 5)
 bcsa3_cnv_spot <- bcsa3_cnv_spot %>% 
   dplyr::filter(region != "TumA2") %>% 
@@ -105,7 +106,7 @@ bcsa3_cnv_spot <- bcsa3_cnv_spot %>%
   dplyr::filter(region != "TumD2") 
 unique(bcsa3_cnv_spot$region)
 
-write.table(bcsa3_cnv_spot$X, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA3_filtered_tumor_70_percent_spots_rep1_for_inferCNV.txt", 
+write.table(bcsa3_cnv_spot$X, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA3_filtered_tumor_50_percent_spots_rep1_for_inferCNV.txt", 
             col.names = F, row.names = F)
 
 

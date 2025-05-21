@@ -1,0 +1,142 @@
+---
+title: "Xenium_analysis"
+author: "Tianyi Li"
+date: "2025-05-18"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load dependencies
+
+```{r load dependencies}
+suppressMessages(library(Seurat))
+suppressMessages(library(SeuratDisk))
+```
+
+## Import validation Xenium data
+
+```{r import validation xenium data}
+
+# Digital pathology annotation
+dig <- read.delim("/Users/tili/Desktop/CIIR/results/Cell_annotation_qupath_analyzed/Cell_Xenium_V1_FFPE_Sample_2.txt")
+dig$x <- dig$Centroid.X.µm
+dig$y <- dig$Centroid.Y.µm
+
+ima <- magick::image_read("/Users/tili/Desktop/CIIR/data/10x_dataset/Xenium_V1_FFPE_Preview_Human_Breast_Cancer_Sample_2_he_image.ome.tif")
+image_in <- magick::image_info(ima)
+width <- image_in$width
+height <- image_in$height
+
+dig$y_reverse <- height - dig$y
+dig$x_reverse <- width - dig$x
+
+p1 <- ggplot(dig, aes(x = x_reverse, y = y, col = Classification)) + geom_point(size = 0.01) + theme_bw() 
+ggplotly(p1)
+
+# Subset the dataset
+d2 <- dig %>% dplyr::select(Classification, x_reverse, y)
+
+# Load Xenium data
+s2 <- LoadXenium(data.dir = "/Users/tili/Desktop/CIIR/data/10x_dataset/Xenium_FFPE_sample2/Xenium_V1_FFPE_Preview_Human_Breast_Cancer_Sample_2_outs/", fov = "fov", assay = "Xenium")
+
+# Remove cells with 0 counts
+s2 <- subset(s2, subset = nCount_Xenium > 0)
+
+VlnPlot(s2, features = c("nFeature_Xenium", "nCount_Xenium"), ncol = 2, pt.size = 0)
+
+# Check tumor, immune, and stroma markers
+p2 <- ImageDimPlot(s2, molecules = c("PTPRC", "ERBB2", "PDGFRA"), nmols = 141828, cols = c("grey")) + theme_bw()
+ggplotly(p2)
+
+# Extract expression of markers and all the dots
+dat <- p2[[1]]$data
+mar <- p2[[1]]$layers[[2]]$data
+
+# Rename colname for mar as x is y in the actual figure
+colnames(mar)[1:2] <- c("y", "x")
+colnames(dat)[2:3] <- c("y", "x")
+
+ggplot(dat, aes(x = x, y = y)) + geom_point(size = 0.01) + theme_bw() 
+ggplot(mar, aes(x = x, y = y, col = molecule)) + geom_point(size = 0.01) + theme_bw() 
+
+# Scaling factor = 0.975, x_crop = 15757.8546, y_crop = 1495.13131
+d2$x_crop <- (d2$x_reverse - 15707) / 0.99
+d2$y_crop <- (d2$y - 1385) / 0.99
+
+# Remove the dots outside the capture area
+d3 <- d2 %>% dplyr::filter(!x_crop < 0) %>% dplyr::filter(!y_crop < 0)
+
+# Plot to check the calculation
+ggplot(d3, aes(x = x_crop, y = y_crop, col = Classification)) + geom_point(size = 0.01, alpha = 0.5) + theme_bw() +
+  geom_point(mar, mapping = aes(x = x, y = y, col = molecule), size = 0.01)
+
+# Tumor expression
+tumor_qupath <- d3 %>% dplyr::filter(Classification == "Tumor")
+tumor_xenium <- mar %>% dplyr::filter(molecule == "ERBB2")
+
+# Calculate 15% of the number of rows
+set.seed(123)  # Set seed for reproducibility
+sample_size <- floor(0.15 * nrow(tumor_xenium))
+tumor_xenium <- tumor_xenium[sample(nrow(tumor_xenium), sample_size), ]
+
+p3 <- ggplot() + geom_point(tumor_xenium, mapping = aes(x = x, y = y), size = 0.01, col = "grey") + 
+  theme_bw() + ggtitle("Xenium ERBB2 expression") + xlab("") + ylab("") + xlim(c(0, 5500))
+p4 <- ggplot() + geom_point(tumor_qupath, mapping = aes(x = x_crop, y = y_crop), size = 0.01, col = "grey") + 
+  theme_bw() + ggtitle("QuPath Tumor annotation") + xlab("") + ylab("") + xlim(c(0, 5500))
+p3 + p4
+
+# Immune expression
+immune_qupath <- d3 %>% dplyr::filter(Classification == "Immune cells")
+immune_xenium <- mar %>% dplyr::filter(molecule == "PTPRC")
+
+# Calculate 50% of the number of rows
+set.seed(123)  # Set seed for reproducibility
+sample_size <- floor(0.5 * nrow(immune_xenium))
+immune_xenium <- immune_xenium[sample(nrow(immune_xenium), sample_size), ]
+
+p3 <- ggplot() + geom_point(immune_xenium, mapping = aes(x = x, y = y), size = 0.01, col = "grey") + 
+  theme_bw() + ggtitle("Xenium PTPRC expression") + xlab("") + ylab("") + xlim(c(0, 5500))
+p4 <- ggplot() + geom_point(immune_qupath, mapping = aes(x = x_crop, y = y_crop), size = 0.01, col = "grey") + 
+  theme_bw() + ggtitle("QuPath Immune annotation") + xlab("") + ylab("") + xlim(c(0, 5500))
+p3 + p4
+
+# Stroma expression
+stroma_qupath <- d3 %>% dplyr::filter(Classification == "Stroma")
+stroma_xenium <- mar %>% dplyr::filter(molecule == "PDGFRA")
+
+p3 <- ggplot() + geom_point(stroma_xenium, mapping = aes(x = x, y = y), size = 0.01, col = "grey") + 
+  theme_bw() + ggtitle("Xenium PDGFRA expression") + xlab("") + ylab("") + xlim(c(0, 5500))
+p4 <- ggplot() + geom_point(stroma_qupath, mapping = aes(x = x_crop, y = y_crop), size = 0.01, col = "grey") + 
+  theme_bw() + ggtitle("QuPath Stroma annotation") + xlab("") + ylab("") + xlim(c(0, 5500))
+p3 + p4
+
+# Combined markers figure
+xenium <- rbind(tumor_xenium, immune_xenium, stroma_xenium)
+xenium$molecule <- factor(xenium$molecule, levels = c("ERBB2", "PDGFRA", "PTPRC"))
+
+qupath <- rbind(tumor_qupath, immune_qupath, stroma_qupath)
+
+p3 <- ggplot() + geom_point(xenium, mapping = aes(x = x, y = y, col = molecule), size = 0.01) + 
+  theme_bw() + ggtitle("Xenium markers") + xlab("") + ylab("") + xlim(c(0, 5500)) +
+  scale_color_manual(values = c("ERBB2" = "#429948", 
+         "PTPRC" = "#FFDE18", "PDGFRA" = "#9BCCE3"))
+p4 <- ggplot() + geom_point(qupath, mapping = aes(x = x_crop, y = y_crop, col = Classification), size = 0.01) + 
+  theme_bw() + ggtitle("QuPath annotation") + xlab("") + ylab("") + xlim(c(0, 5500)) +
+  scale_color_manual(values = c("Tumor" = "#429948", 
+         "Immune cells" = "#FFDE18", "Stroma" = "#9BCCE3"))
+p3 + p4
+
+```
+
+## session info
+
+```{r session info}
+sessionInfo()
+```
+
+
