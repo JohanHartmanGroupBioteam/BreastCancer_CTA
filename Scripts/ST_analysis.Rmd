@@ -944,10 +944,38 @@ Heatmap(bcsa1_cnv_matrix, cluster_rows = F,
 write.csv(bcsa1_cnv_matrix, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA1_i3_90/bcsa1_cnv_matrix.csv")
 write.csv(gene_order, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA1_i3_90/gene_order.csv")
 
+bcsa1_cnv_matrix <- readr::read_csv("/Users/tili/Desktop/CIIR/results/inferCNV/BCSA1_i3_50/bcsa1_cnv_matrix.csv")
+gene_order <- read.csv("/Users/tili/Desktop/CIIR/results/inferCNV/BCSA1_i3_50/gene_order.csv")
+
+all(bcsa1_cnv_matrix[,1] == gene_order$gene)
+rownames(gene_order) <- gene_order$gene
+bcsa1_cnv_matrix <- as.data.frame(bcsa1_cnv_matrix)
+rownames(bcsa1_cnv_matrix) <- bcsa1_cnv_matrix[,1]
+
+bcsa1_cnv_matrix <- bcsa1_cnv_matrix[,-1]
+gene_order <- gene_order[,-1]
+gene_order$chr <- factor(gene_order$chr, levels = unique(gene_order$chr))
+gene_order$gene <- factor(gene_order$gene, levels = unique(gene_order$gene))
+
+meta <- bcsa1@meta.data %>% dplyr::select(integrated_clusters, orig.ident)
+meta$spotid <- rownames(meta)
+meta <- meta[which(meta$spotid %in% colnames(bcsa1_cnv_matrix)),]
+
+col = c("0" = "#3C77AF",
+        "1" = "#7DBFA7", "2" = "#EE934E", "4" = "#AECDE1",
+        "3" = "#D1352B", "9" = "#F5CFE4", 
+        "6" = "#FCED82", "5" = "#B383B9", "8" = "#BBDD78", "7" = "grey", "9" = "#429948")
+ha <- HeatmapAnnotation(Cluster = meta$integrated_clusters, col = list(Cluster = col))
+
+col_fun <- colorRamp2(
+  breaks = c(0.8, 1, 1.2),  # Values to map
+  colors = c("blue", "white", "red")  # Colors corresponding to the values
+)
+
 # Extract meta data
 normal <- read.delim("/Users/tili/Desktop/CIIR/results/infercnv/BCSA1_ref_spot.txt", header = F)
 normal$type <- rep("Normal", nrow(normal))
-tumor <- read.delim("/Users/tili/Desktop/CIIR/results/infercnv/BCSA1_filtered_tumor_40_percent_spots_rep1_for_inferCNV.txt", header = F)
+tumor <- read.delim("/Users/tili/Desktop/CIIR/results/infercnv/BCSA1_filtered_tumor_50_percent_spots_rep1_for_inferCNV.txt", header = F)
 tumor$type <- rep("Tumor", nrow(tumor))
 spots <- rbind(normal, tumor)
 spots <- spots[which(spots$V1 %in% colnames(bcsa1_cnv_matrix)),]
@@ -955,24 +983,35 @@ spots <- spots[which(spots$V1 %in% colnames(bcsa1_cnv_matrix)),]
 tumor_matrix <- bcsa1_cnv_matrix[, which(colnames(bcsa1_cnv_matrix) %in% tumor$V1)]
 
 # Cluster by clone
-hm <- Heatmap(tumor_matrix, cluster_rows = F, 
-        show_row_names = F, show_column_names = F, cluster_columns = T,
-        col = col_fun, 
-        border = T,
-        clustering_method_columns = "ward.D",
-        row_split = gene_order$chr
-        )
+hm <- Heatmap(as.matrix(tumor_matrix), cluster_rows = F, 
+              show_row_names = F, show_column_names = F, cluster_columns = T,
+              col = col_fun, 
+              border = F,
+              clustering_method_columns = "ward.D",
+              row_split = gene_order$chr
+)
 
 # Extract dendrogram for each cluster
+hm <- draw(hm)
 col_order_list <- column_dend(hm)
 
 # Cut tree at height 150 to get 3 clusters
 dend1 <- col_order_list[[1]]
-clone1 <- cutree(dend1, h = 95)
+temp1 <- cutree(dend1, h = 153) %>% as.data.frame() # 50% purity
+temp1 <- cutree(dend1, h = 132) %>% as.data.frame() # 70% purity
+temp1 <- cutree(dend1, h = 110) %>% as.data.frame() # 90% purity
+temp1$cluster <- ifelse(str_detect(temp1$., "1"), "A", 
+                        ifelse(str_detect(temp1$., "2"), "B",
+                               ifelse(str_detect(temp1$., "3"), "C", "D")))
+table(temp1)
+clone1 <- temp1$cluster
+names(clone1) <- rownames(temp1)
 
 dend2 <- col_order_list[[2]]
-temp1 <- cutree(dend2, h = 95) %>% as.data.frame()
-temp1$cluster <- ifelse(str_detect(temp1$., "1"), 3, 4)
+temp1 <- cutree(dend2, h = 153) %>% as.data.frame() # 50% purity
+temp1 <- cutree(dend2, h = 132) %>% as.data.frame() # 70% purity
+temp1 <- cutree(dend2, h = 110) %>% as.data.frame() # 90% purity
+temp1$cluster <- ifelse(str_detect(temp1$., "1"), "B", "C")
 clone2 <- temp1$cluster
 names(clone2) <- rownames(temp1)
 
@@ -982,24 +1021,63 @@ clone <- c(clone1, clone2)
 bcsa <- subset(bcsa1, orig.ident %in% c("BCSA1TumA1", "BCSA1TumB1"))
 bcsa <- subset(bcsa, cells = names(clone))
 bcsa <- AddMetaData(bcsa, clone, col.name = "inferCNV")
-co <- c("1" = "#35A153", "2" = "#FFCD44", "3" = "#1d9bf7", "4" = "#d95f0e")
-SpatialDimPlot(bcsa, group.by = "inferCNV", pt.size.factor = 1, cols = co)
+co <- c("A" = "#35A153", "B" = "#FFCD44", "C" = "#1d9bf7", "D" = "#d95f0e")
+SpatialDimPlot(bcsa, group.by = "inferCNV", cols = co) + patchwork::plot_layout(guides = "collect")
 
 # Plot heatmap with clone information
 clones <- as.data.frame(clone)
 clones$spotid <- rownames(clones)
 clones <- merge(clones, meta, by.x = "spotid", by.y = "spotid", all.x = T, all.y = F)
-ha <- HeatmapAnnotation(Cluster = clones$integrated_clusters, col = list(Cluster = col))
-ba <- HeatmapAnnotation(Clone = clones$clone, col = list(Clone = co))
-Heatmap(tumor_matrix, cluster_rows = F, 
-        show_row_names = F, show_column_names = F, cluster_columns = T,
+
+# Sankey plot
+df2 <- clones %>% make_long(integrated_clusters, clone)
+col = c("0" = "#3C77AF",
+        "1" = "#7DBFA7", "2" = "#EE934E", "4" = "#AECDE1",
+        "3" = "#D1352B", "9" = "#F5CFE4", 
+        "6" = "#FCED82", "5" = "#B383B9", "8" = "#BBDD78", "7" = "grey", "9" = "#429948",
+        "A" = "#35A153", "B" = "#FFCD44", "C" = "#1d9bf7", "D" = "#d95f0e")
+ggplot(df2, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = factor(node))) +
+  geom_sankey(flow.alpha = .6,
+              node.color = "gray30") +
+  geom_sankey_label(aes(label = node), size = 3, color = "white") +
+  scale_fill_manual(values = col, drop = FALSE) +
+  theme_sankey(base_size = 18) +
+  labs(x = NULL) +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = .5))
+
+#ha <- HeatmapAnnotation(Cluster = clones$integrated_clusters, col = list(Cluster = col))
+ba <- rowAnnotation(Clone = clones$clone, col = list(Clone = co))
+
+# List oncogenes
+onco <- read.delim("/Users/tili/Desktop/CIIR/results/inferCNV/Genes_inOncoKB_BCSA1_i3.txt")
+onco <- onco %>% dplyr::filter(Onco == "Yes")
+oncogene <- onco[which(onco$symbol %in% colnames(t(tumor_matrix))),]
+oncogene <- oncogene %>% dplyr::filter(chr %in% c("chr9", "chr12", "chr16", "chr18"))
+oncogene$chr <- factor(oncogene$chr, levels = c("chr9", "chr12", "chr16", "chr18"))
+oncogene <- oncogene %>% dplyr::arrange(chr)
+t_matrix <- t(tumor_matrix)
+col_ha <- HeatmapAnnotation(foo = anno_mark(at = which(colnames(t_matrix) %in% c("NOTCH1",
+                                                                                 "BCL2", "CDH2", "PIK3C3")),
+                                            labels = c("NOTCH1",
+                                                       "BCL2", "CDH2", "PIK3C3")))
+
+
+pdf(file = "/Users/tili/Desktop/CIIR/results/inferCNV/BCSA1_inferCNV_heatmap_90_percent_annotated_20250514.pdf", width = 18, height = 9)
+Heatmap(as.matrix(t_matrix), cluster_rows = T, 
+        show_row_names = F, show_column_names = F, cluster_columns = F,
         col = col_fun, 
-        column_split = clones$clone,
-        top_annotation = ha,
-        bottom_annotation = ba,
-        clustering_method_columns = "ward.D",
-        row_split = gene_order$chr
-        )
+        row_split = clones$clone,
+        left_annotation = ba,
+        top_annotation = col_ha,
+        clustering_method_rows = "ward.D",
+        column_split = gene_order$chr
+)
+dev.off()
 
 ```
 
@@ -2312,10 +2390,39 @@ Heatmap(bcsa2_cnv_matrix, cluster_rows = F,
 write.csv(bcsa2_cnv_matrix, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA2_i3_50/bcsa2_cnv_matrix.csv")
 write.csv(gene_order, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA2_i3_50/gene_order.csv")
 
+bcsa2_cnv_matrix <- readr::read_csv("/Users/tili/Desktop/CIIR/results/inferCNV/BCSA2_i3_50/bcsa2_cnv_matrix.csv")
+gene_order <- read.csv("/Users/tili/Desktop/CIIR/results/inferCNV/BCSA2_i3_50/gene_order.csv")
+
+all(bcsa2_cnv_matrix[,1] == gene_order$gene)
+rownames(gene_order) <- gene_order$gene
+bcsa2_cnv_matrix <- as.data.frame(bcsa2_cnv_matrix)
+rownames(bcsa2_cnv_matrix) <- bcsa2_cnv_matrix[,1]
+
+bcsa2_cnv_matrix <- bcsa2_cnv_matrix[,-1]
+gene_order <- gene_order[,-1]
+gene_order$chr <- factor(gene_order$chr, levels = unique(gene_order$chr))
+gene_order$gene <- factor(gene_order$gene, levels = unique(gene_order$gene))
+
+meta <- bcsa2@meta.data %>% dplyr::select(integrated_clusters, orig.ident)
+meta$spotid <- rownames(meta)
+meta <- meta[which(meta$spotid %in% colnames(bcsa2_cnv_matrix)),]
+
+col = c("0" = "#3C77AF",
+        "1" = "#7DBFA7", "2" = "#EE934E", "4" = "#AECDE1",
+        "3" = "#D1352B", "9" = "#F5CFE4", 
+        "6" = "#FCED82", "7" = "#B383B9", "8" = "#BBDD78", 
+        "5" = "grey", "9" = "#429948", "10" = "#7A2C2C")
+ha <- HeatmapAnnotation(Cluster = meta$integrated_clusters, col = list(Cluster = col))
+
+col_fun <- colorRamp2(
+  breaks = c(0.8, 1, 1.2),  # Values to map
+  colors = c("blue", "white", "red")  # Colors corresponding to the values
+)
+
 # Extract meta data
 normal <- read.delim("/Users/tili/Desktop/CIIR/results/infercnv/BCSA2_ref_spot.txt", header = F)
 normal$type <- rep("Normal", nrow(normal))
-tumor <- read.delim("/Users/tili/Desktop/CIIR/results/infercnv/BCSA2_filtered_tumor_40_percent_spots_rep1_for_inferCNV.txt", header = F)
+tumor <- read.delim("/Users/tili/Desktop/CIIR/results/infercnv/BCSA2_filtered_tumor_50_percent_spots_rep1_for_inferCNV.txt", header = F)
 tumor$type <- rep("Tumor", nrow(tumor))
 spots <- rbind(normal, tumor)
 spots <- spots[which(spots$V1 %in% colnames(bcsa2_cnv_matrix)),]
@@ -2332,19 +2439,26 @@ hm <- Heatmap(as.matrix(tumor_matrix), cluster_rows = F,
 )
 
 # Extract dendrogram for each cluster
+hm <- draw(hm)
 col_order_list <- column_dend(hm)
 
 # Cut tree at height 150 to get 3 clusters
 dend1 <- col_order_list[[1]]
-temp1 <- cutree(dend1, h = 1380) %>% as.data.frame()
+temp1 <- cutree(dend1, h = 1594) %>% as.data.frame() # 50% purity
+temp1 <- cutree(dend1, h = 1380) %>% as.data.frame() # 70% purity
+temp1 <- cutree(dend1, h = 1036) %>% as.data.frame() # 90% purity
+table(temp1)
 temp1$cluster <- ifelse(str_detect(temp1$., "1"), "A", "B")
 clone1 <- temp1$cluster
 names(clone1) <- rownames(temp1)
 
 dend2 <- col_order_list[[2]]
-temp1 <- cutree(dend2, h = 1380) %>% as.data.frame()
-temp1$cluster <- dplyr::recode(temp1$., `1` = "B", `2` = "C")#
-                               #, `3` = "E", `4` = "F", `5` = "G", `6` = "H")
+temp1 <- cutree(dend2, h = 1594) %>% as.data.frame() # 50% purity
+temp1 <- cutree(dend2, h = 1380) %>% as.data.frame() # 70% purity
+temp1 <- cutree(dend2, h = 1036) %>% as.data.frame() # 90% purity
+table(temp1)
+temp1$cluster <- dplyr::recode(temp1$., `1` = "A", `2` = "C", `3` = "D")#
+                               #, `4` = "F", `5` = "G", `6` = "H")
 clone2 <- temp1$cluster
 names(clone2) <- rownames(temp1)
 
@@ -2354,9 +2468,8 @@ clone <- c(clone1, clone2)
 bcsa <- subset(bcsa2, orig.ident %in% c("BCSA2TumB1", "BCSA2TumC1", "BCSA2TumD1", "BCSA2TumE1"))
 bcsa <- subset(bcsa, cells = names(clone))
 bcsa <- AddMetaData(bcsa, clone, col.name = "inferCNV")
-co <- c("A" = "#35A153", "B" = "#FFCD44", "C" = "#1d9bf7", "D" = "#d95f0e", 
-        "E" = "#c51b7d", "F" = "#bf812d", "G" = "#35978f", "H" = "#878787")
-SpatialDimPlot(bcsa, group.by = "inferCNV", cols = co, ncol = 2)
+co <- c("A" = "#35A153", "B" = "#FFCD44", "C" = "#1d9bf7")
+SpatialDimPlot(bcsa, group.by = "inferCNV", cols = co, ncol = 2) + patchwork::plot_layout(guides = "collect")
 
 # Plot heatmap with clone information
 clones <- as.data.frame(clone)
@@ -2386,23 +2499,34 @@ ggplot(df2, aes(x = x,
   theme(legend.position = "none",
         plot.title = element_text(hjust = .5))
 
-ha <- HeatmapAnnotation(Cluster = clones$integrated_clusters, col = list(Cluster = col))
+#ha <- HeatmapAnnotation(Cluster = clones$integrated_clusters, col = list(Cluster = col))
 ba <- rowAnnotation(Clone = clones$clone, col = list(Clone = co))
+
+# List oncogenes
+onco <- read.delim("/Users/tili/Desktop/CIIR/results/inferCNV/Genes_inOncoKB_BCSA2_i3.txt")
+onco <- onco %>% dplyr::filter(Onco == "Yes")
+oncogene <- onco[which(onco$symbol %in% colnames(t(tumor_matrix))),]
+oncogene <- oncogene %>% dplyr::filter(chr %in% c("chr9", "chr15", "chr17"))
+oncogene$chr <- factor(oncogene$chr, levels = c("chr9", "chr15", "chr17"))
+oncogene <- oncogene %>% dplyr::arrange(chr)
+
+t_matrix <- t(tumor_matrix)
 
 col_ha <- HeatmapAnnotation(foo = anno_mark(at = which(colnames(t(tumor_matrix)) %in% c("ERBB2")),
                                             labels = c("ERBB2")))
 
-pdf(file = "/Users/tili/Desktop/CIIR/results/inferCNV/BCSA2_inferCNV_heatmap_3_clones.pdf", width = 18, height = 9)
-Heatmap(t(as.matrix(tumor_matrix)), cluster_rows = T, 
+pdf(file = "/Users/tili/Desktop/CIIR/results/inferCNV/BCSA2_inferCNV_heatmap_1_clone_50_percent_annotated_20250516.pdf", width = 18, height = 9)
+Heatmap(as.matrix(t_matrix), cluster_rows = T, 
         show_row_names = F, show_column_names = F, cluster_columns = F,
         col = col_fun, 
         row_split = clones$clone,
         left_annotation = ba,
-        bottom_annotation = col_ha,
+        top_annotation = col_ha,
         clustering_method_rows = "ward.D",
         column_split = gene_order$chr
 )
 dev.off()
+
 ```
 
 Processed R objects are obtained using VisiumDataAnalysisPAM50_v1.4_cleaned.R file. Spatial PAM50 calculation is performed using the raw count matrix. Post-filtering step is performed in the following section using epithelial cells > 20% as cutoff.
@@ -3676,10 +3800,38 @@ Heatmap(bcsa3_cnv_matrix, cluster_rows = F,
 write.csv(bcsa3_cnv_matrix, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA3_i3_90/bcsa3_cnv_matrix.csv")
 write.csv(gene_order, file = "/Users/tili/Desktop/CIIR/results/infercnv/BCSA3_i3_90/gene_order.csv")
 
+bcsa3_cnv_matrix <- readr::read_csv("/Users/tili/Desktop/CIIR/results/inferCNV/BCSA3_i3_90/bcsa3_cnv_matrix.csv")
+gene_order <- read.csv("/Users/tili/Desktop/CIIR/results/inferCNV/BCSA3_i3_90/gene_order.csv")
+
+all(bcsa3_cnv_matrix[,1] == gene_order$gene)
+rownames(gene_order) <- gene_order$gene
+bcsa3_cnv_matrix <- as.data.frame(bcsa3_cnv_matrix)
+rownames(bcsa3_cnv_matrix) <- bcsa3_cnv_matrix[,1]
+
+bcsa3_cnv_matrix <- bcsa3_cnv_matrix[,-1]
+gene_order <- gene_order[,-1]
+gene_order$chr <- factor(gene_order$chr, levels = unique(gene_order$chr))
+gene_order$gene <- factor(gene_order$gene, levels = unique(gene_order$gene))
+
+meta <- bcsa3@meta.data %>% dplyr::select(integrated_clusters, orig.ident)
+meta$spotid <- rownames(meta)
+meta <- meta[which(meta$spotid %in% colnames(bcsa3_cnv_matrix)),]
+
+col = c("0" = "#3C77AF",
+        "1" = "#7DBFA7", "2" = "#EE934E", "4" = "#AECDE1",
+        "3" = "#D1352B", "9" = "#F5CFE4", 
+        "5" = "#FCED82", "7" = "#B383B9", "8" = "#BBDD78", "6" = "grey", "9" = "#429948", "10" = "#7A2C2C")
+ha <- HeatmapAnnotation(Cluster = meta$integrated_clusters, col = list(Cluster = col))
+
+col_fun <- colorRamp2(
+  breaks = c(0.8, 1, 1.2),  # Values to map
+  colors = c("blue", "white", "red")  # Colors corresponding to the values
+)
+
 # Extract meta data
 normal <- read.delim("/Users/tili/Desktop/CIIR/results/infercnv/BCSA3_ref_spot.txt", header = F)
 normal$type <- rep("Normal", nrow(normal))
-tumor <- read.delim("/Users/tili/Desktop/CIIR/results/infercnv/BCSA3_filtered_tumor_40_percent_spots_rep1_for_inferCNV.txt", header = F)
+tumor <- read.delim("/Users/tili/Desktop/CIIR/results/infercnv/BCSA3_filtered_tumor_90_percent_spots_rep1_for_inferCNV.txt", header = F)
 tumor$type <- rep("Tumor", nrow(tumor))
 spots <- rbind(normal, tumor)
 spots <- spots[which(spots$V1 %in% colnames(bcsa3_cnv_matrix)),]
@@ -3696,19 +3848,32 @@ hm <- Heatmap(as.matrix(tumor_matrix), cluster_rows = F,
 )
 
 # Extract dendrogram for each cluster
+hm <- draw(hm)
 col_order_list <- column_dend(hm)
 
 # Cut tree at height 150 to get 3 clusters
 dend1 <- col_order_list[[1]]
-temp1 <- cutree(dend1, h = 205) %>% as.data.frame()
-temp1$cluster <- ifelse(str_detect(temp1$., "1"), "A", "B")
+temp1 <- cutree(dend1, h = 255) %>% as.data.frame() # 50% purity
+temp1 <- cutree(dend1, h = 297) %>% as.data.frame() # 70% purity
+temp1 <- cutree(dend1, h = 176) %>% as.data.frame() # 90% purity
+table(temp1)
+temp1$cluster <- ifelse(str_detect(temp1$., "1"), "A", 
+                        ifelse(str_detect(temp1$., "2"), "B", "C"))
 clone1 <- temp1$cluster
 names(clone1) <- rownames(temp1)
 
 dend2 <- col_order_list[[2]]
-temp1 <- cutree(dend2, h = 205) %>% as.data.frame()
-temp1$cluster <- dplyr::recode(temp1$., `1` = "C", `2` = "D")#
-#, `3` = "E", `4` = "F", `5` = "G", `6` = "H")
+# 50% and 70% purity
+temp1 <- cutree(dend2, h = 255) %>% as.data.frame() # 50% purity
+temp1 <- cutree(dend2, h = 297) %>% as.data.frame() # 70% purity
+table(temp1)
+temp1$cluster <- dplyr::recode(temp1$., `1` = "B", `2` = "C", `3` = "D") # 50% and 70% purity
+
+# 90% purity
+temp1 <- cutree(dend2, h = 176) %>% as.data.frame() # 90% purity
+table(temp1)
+temp1$cluster <- dplyr::recode(temp1$., `1` = "C") # 90% purity
+
 clone2 <- temp1$cluster
 names(clone2) <- rownames(temp1)
 
@@ -3718,9 +3883,8 @@ clone <- c(clone1, clone2)
 bcsa <- subset(bcsa3, orig.ident %in% c("BCSA3TumA1", "BCSA3TumB1", "BCSA3TumC1", "BCSA3TumD1"))
 bcsa <- subset(bcsa, cells = names(clone))
 bcsa <- AddMetaData(bcsa, clone, col.name = "inferCNV")
-co <- c("A" = "#35A153", "B" = "#FFCD44", "C" = "#1d9bf7", "D" = "#d95f0e", 
-        "E" = "#c51b7d", "F" = "#bf812d", "G" = "#35978f", "H" = "#878787")
-SpatialDimPlot(bcsa, group.by = "inferCNV", cols = co, ncol = 2)
+co <- c("A" = "#35A153", "B" = "#FFCD44", "C" = "#1d9bf7", "D" = "#d95f0e")
+SpatialDimPlot(bcsa, group.by = "inferCNV", cols = co, ncol = 2) + patchwork::plot_layout(guides = "collect")
 
 # Plot heatmap with clone information
 clones <- as.data.frame(clone)
@@ -3733,8 +3897,7 @@ col = c("0" = "#3C77AF",
                 "1" = "#7DBFA7", "2" = "#EE934E", "4" = "#AECDE1",
                 "3" = "#D1352B", "9" = "#F5CFE4", 
                 "5" = "#FCED82", "7" = "#B383B9", "8" = "#BBDD78", "6" = "grey", "9" = "#429948", "10" = "#7A2C2C",
-        "A" = "#35A153", "B" = "#FFCD44", "C" = "#1d9bf7", "D" = "#d95f0e",
-        "E" = "#c51b7d", "F" = "#bf812d", "G" = "#35978f", "H" = "#878787")
+        "A" = "#35A153", "B" = "#FFCD44", "C" = "#1d9bf7", "D" = "#d95f0e")
 ggplot(df2, aes(x = x, 
                 next_x = next_x, 
                 node = node, 
@@ -3749,23 +3912,34 @@ ggplot(df2, aes(x = x,
   theme(legend.position = "none",
         plot.title = element_text(hjust = .5))
 
-ha <- HeatmapAnnotation(Cluster = clones$integrated_clusters, col = list(Cluster = col))
+#ha <- HeatmapAnnotation(Cluster = clones$integrated_clusters, col = list(Cluster = col))
 ba <- rowAnnotation(Clone = clones$clone, col = list(Clone = co))
 
-col_ha <- HeatmapAnnotation(foo = anno_mark(at = which(colnames(t(tumor_matrix)) %in% c("ERBB2")),
-                                            labels = c("ERBB2")))
+# List oncogenes
+onco <- read.delim("/Users/tili/Desktop/CIIR/results/inferCNV/Genes_inOncoKB_BCSA3_i3.txt")
+onco <- onco %>% dplyr::filter(Onco == "Yes")
+oncogene <- onco[which(onco$symbol %in% colnames(t(tumor_matrix))),]
+oncogene <- oncogene %>% dplyr::filter(chr %in% c("chr7", "chr8", "chr17"))
+oncogene$chr <- factor(oncogene$chr, levels = c("chr7", "chr8", "chr17"))
+oncogene <- oncogene %>% dplyr::arrange(chr)
 
-pdf(file = "/Users/tili/Desktop/CIIR/results/inferCNV/BCSA3_inferCNV_heatmap_4_clones.pdf", width = 18, height = 9)
-Heatmap(t(as.matrix(tumor_matrix)), cluster_rows = T, 
+t_matrix <- t(tumor_matrix)
+
+col_ha <- HeatmapAnnotation(foo = anno_mark(at = which(colnames(t_matrix) %in% c("MYC", "ERBB2")),
+                                            labels = c("MYC", "ERBB2")))
+
+pdf(file = "/Users/tili/Desktop/CIIR/results/inferCNV/BCSA3_inferCNV_heatmap_3_clones_90_percent_annotated_20250514.pdf", width = 18, height = 9)
+Heatmap(as.matrix(t_matrix), cluster_rows = T, 
         show_row_names = F, show_column_names = F, cluster_columns = F,
         col = col_fun, 
         row_split = clones$clone,
         left_annotation = ba,
-        bottom_annotation = col_ha,
+        top_annotation = col_ha,
         clustering_method_rows = "ward.D",
         column_split = gene_order$chr
 )
 dev.off()
+
 ```
 
 Processed R objects are obtained using VisiumDataAnalysisPAM50_v1.4_cleaned.R file. Spatial PAM50 calculation is performed using the raw count matrix. Post-filtering step is performed in the following section using epithelial cells > 20% as cutoff.
