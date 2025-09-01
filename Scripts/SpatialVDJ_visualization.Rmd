@@ -77,6 +77,9 @@ spots$spotid <- paste0("TumE2_", rownames(spots))
 spots <- spots[which(spots$spotid %in% e2$X),]
 e2 <- merge(e2, spots, by.x = "X", by.y = "spotid", all.x = T, all.y = T)
 
+# Save the results
+e2_all_clone0_spots <- e2
+
 # Plot the visium spots
 ggplot(e2, aes(y = row_reverse, x =col)) + 
   annotation_raster(ima, ymin = 0, ymax= height, xmin = 0, xmax = width) +
@@ -190,7 +193,7 @@ meta <- read.csv("/Users/tili/Desktop/CIIR/data/SpatialVDJ_forZenodo/data/breast
 # Fix the different name of ST barcodes
 vdj$st_barcode <- paste0(vdj$st_barcode, "-1")
 
-# Plot clone 602
+# Plot clone 61
 clone61 <- vdj$'61'
 names(clone61) <- vdj$st_barcode
 
@@ -213,6 +216,9 @@ spots <- as.data.frame(clone61)
 spots$spotid <- paste0("TumA1_", rownames(spots))
 spots <- spots[which(spots$spotid %in% a1$X),]
 a1 <- merge(a1, spots, by.x = "X", by.y = "spotid", all.x = T, all.y = T)
+
+# Save the data
+a1_all_clone61_spots <- a1
 
 # Plot the visium spots
 ggplot(a1, aes(y = row_reverse, x =col)) + 
@@ -416,6 +422,31 @@ pie(e2$Percent, labels = paste(e2$Celltype, round(e2$Percent * 100, 2), "%"),
     main = "B cell Clone0",
     cex = 0.8)
 
+# Save data for spots with B cell clone 0
+e2_all_clone0_spots$cellid <- gsub("TumE2_", "", e2_all_clone0_spots$X)
+#top10 <- e2_all_clone0_spots %>% dplyr::arrange(desc(clone0)) %>% head(n = 10)
+
+e2 <- e2_agg %>% dplyr::filter(X %in% e2_all_clone0_spots$cellid) %>% 
+  pivot_longer(!X, names_to = "Celltype", values_to = "Abundance")
+
+# Calculate normalized cell percentage
+e2 <- e2 %>% dplyr::group_by(X) %>% mutate(Total = sum(Abundance))
+e2$Percent <- round(e2$Abundance / e2$Total * 100, 2)
+
+e2_df <- e2 %>% dplyr::select(X, Celltype, Percent) %>% 
+  pivot_wider(values_from = "Percent", names_from = "Celltype")
+
+# Get QuPath prediction
+qupath <- read.csv("/Users/tili/Desktop/CIIR/results/cell2location/Merged_correlation_results/BCSA2TumE2_correlation_matrix.csv")
+
+# Filter out spots with clone 61
+qupath <- qupath %>% dplyr::filter(X %in% e2_df$X) %>% 
+  dplyr::select(X, tumor_per, immune_per, stroma_per)
+
+e2_final <- merge(e2_df, qupath, by = "X")
+
+openxlsx::write.xlsx(e2_final, file = "/Users/tili/Desktop/CIIR/results/tables/BCSA2TumE2_B_cell_clone0_all_spots_deconvolution_w_qupath.xlsx")
+
 ############### BCSA3TumA1 - Clone61: TumA1_ATACGTTATGCACGGA-1
 
 a1 <- read.csv("/Users/tili/Desktop/CIIR/results/cell2location/BCSA3TumA1_q05.csv")
@@ -453,6 +484,31 @@ pie(a1$Percent, labels = paste(a1$Celltype, round(a1$Percent * 100, 2), "%"),
     col = c("#FEBD85", "#8DBAD9", "#DCDD8F", "#E99092", "#8ADDE4", "#C4A9A2", "#45AB84", "#1975BA"), 
     main = "T cell Clone61",
     cex = 0.8)
+
+# Save data for top10 spots with T cell clone 61
+a1_all_clone61_spots$cellid <- gsub("TumA1_", "", a1_all_clone61_spots$X)
+#top10 <- a1_all_clone61_spots %>% dplyr::arrange(desc(clone61)) %>% head(n = 10)
+
+a1 <- a1_agg %>% dplyr::filter(X %in% a1_all_clone61_spots$cellid) %>% 
+  pivot_longer(!X, names_to = "Celltype", values_to = "Abundance")
+
+# Calculate normalized cell percentage
+a1 <- a1 %>% dplyr::group_by(X) %>% mutate(Total = sum(Abundance))
+a1$Percent <- round(a1$Abundance / a1$Total * 100, 2)
+
+a1_df <- a1 %>% dplyr::select(X, Celltype, Percent) %>% 
+  pivot_wider(values_from = "Percent", names_from = "Celltype")
+
+# Get QuPath prediction
+qupath <- read.csv("/Users/tili/Desktop/CIIR/results/cell2location/Merged_correlation_results/BCSA3TumA1_correlation_matrix.csv")
+
+# Filter out spots with clone 61
+qupath <- qupath %>% dplyr::filter(X %in% a1_df$X) %>% 
+  dplyr::select(X, tumor_per, immune_per, stroma_per)
+
+a1_final <- merge(a1_df, qupath, by = "X")
+
+openxlsx::write.xlsx(a1_final, file = "/Users/tili/Desktop/CIIR/results/tables/BCSA3TumA1_T_cell_clone61_all_spots_deconvolution_w_qupath.xlsx")
 
 ```
 
